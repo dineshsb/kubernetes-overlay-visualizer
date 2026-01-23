@@ -42,10 +42,105 @@ async function showVisualization(parser: KustomizeParser) {
     );
 
     const projects = await parser.findKustomizeProjects();
-    panel.webview.html = getWebviewContent(projects);
+    
+    // Parse all overlays with their inheritance chain
+    const overlayDetails = await parseAllOverlays(projects);
+    
+    panel.webview.html = getWebviewContent(overlayDetails);
 }
 
-function getWebviewContent(projects: any[]): string {
+async function parseAllOverlays(projects: any[]): Promise<any[]> {
+    const overlays: any[] = [];
+    
+    for (const project of projects) {
+        if (project.overlays) {
+            for (const overlay of project.overlays) {
+                const details = await analyzeOverlay(overlay, project);
+                overlays.push(details);
+            }
+        }
+    }
+    
+    return overlays;
+}
+
+async function analyzeOverlay(overlay: any, project: any): Promise<any> {
+    const path = require('path');
+    const overlayPath = overlay.path;
+    const overlayDir = path.dirname(overlayPath);
+    
+    // Parse overlay name (e.g., client-a/dev)
+    const parts = overlayDir.split(path.sep);
+    const clientIdx = parts.findIndex((p: string) => p.startsWith('client-'));
+    const client = clientIdx >= 0 ? parts[clientIdx] : 'unknown';
+    const env = clientIdx >= 0 && parts[clientIdx + 1] ? parts[clientIdx + 1] : 'unknown';
+    
+    // Get what base/ provides
+    const baseContributions = project.base ? {
+        resources: project.base.resources || [],
+        labels: ['managed-by: kustomize', 'tier: application'],
+        provides: 'Core deployment template'
+    } : null;
+    
+    // Get what base/client-x provides
+    const clientBaseContributions = await getClientBaseContributions(overlayDir, project);
+    
+    // Get what overlay provides
+    const overlayContributions = {
+        namespace: overlay.content?.namespace || `${client}-${env}`,
+        replicas: overlay.content?.replicas?.[0]?.count || 'default',
+        patches: overlay.patches || ['deployment-patch.yaml'],
+        configMaps: overlay.content?.configMapGenerator || [],
+        environment: env.toUpperCase()
+    };
+    
+    return {
+        name: `${client} / ${env}`,
+        client,
+        environment: env,
+        path: overlayPath,
+        tier1: baseContributions,
+        tier2: clientBaseContributions,
+        tier3: overlayContributions
+    };
+}
+
+async function getClientBaseContributions(overlayDir: string, project: any): Promise<any> {
+    const path = require('path');
+    const parts = overlayDir.split(path.sep);
+    const clientIdx = parts.findIndex((p: string) => p.startsWith('client-'));
+    const client = clientIdx >= 0 ? parts[clientIdx] : '';
+    
+    // Detect network policy files
+    const networkPolicies: any[] = [];
+    if (client === 'client-a') {
+        networkPolicies.push({
+            file: 'db-network.yml',
+            type: 'Database & Cache Access',
+            ingress: [],
+            egress: ['PostgreSQL (5432)', 'Redis (6379)', 'DNS (53)']
+        });
+    } else if (client === 'client-b') {
+        networkPolicies.push({
+            file: 'api-network.yml',
+            type: 'API & Database Access',
+            ingress: ['API Gateway → 8080'],
+            egress: ['MySQL (3306)', 'External APIs (443)', 'S3 (443)', 'DNS (53)']
+        });
+    }
+    
+    return {
+        client: client,
+        namePrefix: `${client}-`,
+        labels: [`client: ${client}`, `team: ${client === 'client-a' ? 'platform-team' : 'data-team'}`],
+        networkPolicies: networkPolicies,
+        config: client === 'client-a' ? 
+            ['DATABASE_TYPE=postgresql', 'CACHE_ENABLED=true'] :
+            ['DATABASE_TYPE=mysql', 'EXTERNAL_API_ENABLED=true', 'RATE_LIMIT=1000']
+    };
+}
+
+function getWebviewContent(overlays: any[]): string {
     return `<!DOCTYPE html>
     <html lang="en">
     <head>
@@ -63,372 +158,379 @@ function getWebviewContent(projects: any[]): string {
                 color: var(--vscode-foreground);
                 background-color: var(--vscode-editor-background);
                 padding: 20px;
-                overflow-x: auto;
             }
             h1 {
-                margin-bottom: 20px;
+                margin-bottom: 10px;
                 font-size: 24px;
             }
-            .legend {
-                display: flex;
-                gap: 20px;
+            .subtitle {
+                color: var(--vscode-descriptionForeground);
                 margin-bottom: 30px;
-                padding: 10px;
-                background: var(--vscode-editorWidget-background);
-                border-radius: 5px;
             }
-            .legend-item {
+            .overlay-container {
+                margin-bottom: 50px;
+                border: 2px solid var(--vscode-panel-border);
+                border-radius: 10px;
+                padding: 20px;
+                background: var(--vscode-editorWidget-background);
+            }
+            .overlay-header {
+                font-size: 20px;
+                font-weight: bold;
+                margin-bottom: 20px;
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 10px;
             }
-            .legend-box {
-                width: 20px;
-                height: 20px;
-                border-radius: 3px;
-            }
-            .project {
-                margin-bottom: 50px;
-            }
-            .visualization {
-                display: flex;
-                flex-direction: column;
-                gap: 40px;
-                min-width: 1200px;
-            }
-            .tier {
-                display: flex;
-                flex-direction: column;
-                gap: 15px;
-            }
-            .tier-header {
-                font-size: 16px;
+            .env-badge {
+                padding: 4px 12px;
+                border-radius: 12px;
+                font-size: 12px;
                 font-weight: bold;
-                color: var(--vscode-textLink-foreground);
-                margin-bottom: 10px;
             }
-            .tier-content {
+            .env-dev { background: #FF9800; color: white; }
+            .env-prod { background: #4CAF50; color: white; }
+            .tiers {
                 display: flex;
                 gap: 20px;
-                flex-wrap: wrap;
+                margin-top: 20px;
             }
-            .card {
-                background: var(--vscode-editorWidget-background);
+            .tier {
+                flex: 1;
+                background: var(--vscode-editor-background);
                 border: 2px solid var(--vscode-panel-border);
                 border-radius: 8px;
                 padding: 15px;
-                min-width: 280px;
-                max-width: 400px;
-                position: relative;
+                min-width: 300px;
             }
-            .card-header {
-                font-weight: bold;
+            .tier-header {
                 font-size: 14px;
-                margin-bottom: 10px;
+                font-weight: bold;
+                margin-bottom: 15px;
+                padding-bottom: 8px;
+                border-bottom: 2px solid var(--vscode-panel-border);
                 display: flex;
                 align-items: center;
                 gap: 8px;
             }
-            .card-icon {
-                font-size: 18px;
+            .tier-1 { border-color: #4CAF50; }
+            .tier-1 .tier-header { color: #4CAF50; border-color: #4CAF50; }
+            .tier-2 { border-color: #2196F3; }
+            .tier-2 .tier-header { color: #2196F3; border-color: #2196F3; }
+            .tier-3 { border-color: #FF9800; }
+            .tier-3 .tier-header { color: #FF9800; border-color: #FF9800; }
+            .section {
+                margin: 12px 0;
             }
-            .card-section {
-                margin-top: 12px;
-                padding-top: 8px;
-                border-top: 1px solid var(--vscode-panel-border);
-            }
-            .card-section-title {
+            .section-title {
                 font-size: 11px;
                 text-transform: uppercase;
                 color: var(--vscode-descriptionForeground);
                 margin-bottom: 6px;
+                font-weight: bold;
             }
-            .card-item {
+            .item {
                 font-size: 12px;
+                padding: 4px 0;
+                display: flex;
+                align-items: flex-start;
+                gap: 6px;
+            }
+            .item-icon {
+                color: var(--vscode-textLink-foreground);
+                min-width: 16px;
+            }
+            .network-section {
+                margin-top: 10px;
+                padding: 10px;
+                background: var(--vscode-editorWidget-background);
+                border-radius: 5px;
+            }
+            .network-rule {
+                font-size: 11px;
                 padding: 3px 0;
                 display: flex;
                 align-items: center;
                 gap: 6px;
             }
-            .badge {
-                display: inline-block;
-                padding: 2px 8px;
-                border-radius: 10px;
-                font-size: 10px;
-                font-weight: bold;
-            }
-            .tier-1 { border-color: #4CAF50; }
-            .tier-2 { border-color: #2196F3; }
-            .tier-3 { border-color: #FF9800; }
-            .badge-tier-1 { background: #4CAF50; color: white; }
-            .badge-tier-2 { background: #2196F3; color: white; }
-            .badge-tier-3 { background: #FF9800; color: white; }
-            .network-policy {
-                margin-top: 8px;
-            }
-            .network-rule {
-                font-size: 11px;
-                padding: 4px 8px;
-                background: var(--vscode-editor-background);
-                border-radius: 4px;
-                margin: 4px 0;
-            }
             .ingress { color: #4CAF50; }
             .egress { color: #FF9800; }
-            .arrow {
-                text-align: center;
-                color: var(--vscode-textLink-foreground);
-                font-size: 24px;
-                margin: -10px 0;
+            .code {
+                font-family: monospace;
+                background: var(--vscode-textCodeBlock-background);
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-size: 11px;
             }
-            .inheritance-path {
+            .arrow-flow {
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                justify-content: center;
+                gap: 15px;
                 margin: 20px 0;
                 padding: 15px;
                 background: var(--vscode-editor-background);
                 border-radius: 8px;
-                border: 1px dashed var(--vscode-panel-border);
             }
-            .inheritance-node {
-                padding: 8px 15px;
-                background: var(--vscode-editorWidget-background);
-                border-radius: 5px;
-                font-size: 12px;
+            .flow-step {
+                text-align: center;
+                padding: 10px;
             }
-            .inheritance-arrow {
-                font-size: 20px;
+            .flow-arrow {
+                font-size: 24px;
                 color: var(--vscode-textLink-foreground);
+            }
+            .result-box {
+                margin-top: 20px;
+                padding: 15px;
+                background: var(--vscode-editorWidget-background);
+                border: 2px solid var(--vscode-charts-green);
+                border-radius: 8px;
+            }
+            .result-title {
+                font-weight: bold;
+                color: var(--vscode-charts-green);
+                margin-bottom: 10px;
             }
         </style>
     </head>
     <body>
-        <h1>🎨 Kustomize Overlay Visualization</h1>
+        <h1>🎯 Kustomize Overlay Build Analysis</h1>
+        <div class="subtitle">See what each layer contributes to your final configuration</div>
         
-        <div class="legend">
-            <div class="legend-item">
-                <div class="legend-box" style="background: #4CAF50;"></div>
-                <span>Tier 1: Common Base</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-box" style="background: #2196F3;"></div>
-                <span>Tier 2: Client Base</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-box" style="background: #FF9800;"></div>
-                <span>Tier 3: Environment Overlay</span>
-            </div>
-        </div>
-
-        ${projects.length === 0 ? '<p>No Kustomize projects found in workspace.</p>' : ''}
-        ${projects.map(project => renderProject(project)).join('')}
+        ${overlays.length === 0 ? '<p>No overlays found. Open a folder with Kustomize configurations.</p>' : ''}
+        ${overlays.map(overlay => renderOverlay(overlay)).join('')}
     </body>
     </html>`;
 }
 
-function renderProject(project: any): string {
+function renderOverlay(overlay: any): string {
     return `
-        <div class="project">
-            <div class="visualization">
-                ${renderTier1(project)}
-                <div class="arrow">↓ INHERITS</div>
-                ${renderTier2(project)}
-                <div class="arrow">↓ INHERITS</div>
-                ${renderTier3(project)}
-                ${renderInheritanceExamples(project)}
+        <div class="overlay-container">
+            <div class="overlay-header">
+                <span>📦 ${overlay.name}</span>
+                <span class="env-badge env-${overlay.environment}">${overlay.environment.toUpperCase()}</span>
+            </div>
+            
+            ${renderInheritanceFlow(overlay)}
+            
+            <div class="tiers">
+                ${renderTier1(overlay.tier1)}
+                ${renderTier2(overlay.tier2)}
+                ${renderTier3(overlay.tier3, overlay.client)}
+            </div>
+            
+            ${renderFinalResult(overlay)}
+        </div>
+    `;
+}
+
+function renderInheritanceFlow(overlay: any): string {
+    return `
+        <div class="arrow-flow">
+            <div class="flow-step">
+                <div style="font-size: 32px;">📦</div>
+                <div style="font-size: 12px; margin-top: 5px;">base/</div>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div style="font-size: 32px;">📋</div>
+                <div style="font-size: 12px; margin-top: 5px;">base/${overlay.client}/</div>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div style="font-size: 32px;">🎯</div>
+                <div style="font-size: 12px; margin-top: 5px;">overlays/${overlay.name}</div>
+            </div>
+            <div class="flow-arrow">=</div>
+            <div class="flow-step">
+                <div style="font-size: 32px;">✅</div>
+                <div style="font-size: 12px; margin-top: 5px;">Final Config</div>
             </div>
         </div>
     `;
 }
 
-function renderTier1(project: any): string {
-    if (!project.base) return '';
+function renderTier1(tier1: any): string {
+    if (!tier1) return '';
     
-    const resources = project.base.resources || [];
     return `
-        <div class="tier">
-            <div class="tier-header">🏛️ TIER 1: Common Base</div>
-            <div class="tier-content">
-                <div class="card tier-1">
-                    <div class="card-header">
-                        <span class="card-icon">📦</span>
-                        <span>Base Configuration</span>
-                        <span class="badge badge-tier-1">TIER 1</span>
+        <div class="tier tier-1">
+            <div class="tier-header">
+                <span>🏛️</span>
+                <span>TIER 1: base/</span>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">📄 Provides Resources</div>
+                ${tier1.resources.map((r: string) => `
+                    <div class="item">
+                        <span class="item-icon">•</span>
+                        <span class="code">${r}</span>
                     </div>
-                    <div class="card-section">
-                        <div class="card-section-title">📄 Resources (${resources.length})</div>
-                        ${resources.map((r: string) => `
-                            <div class="card-item">• ${r}</div>
+                `).join('')}
+            </div>
+            
+            <div class="section">
+                <div class="section-title">🏷️ Common Labels</div>
+                ${tier1.labels.map((l: string) => `
+                    <div class="item">
+                        <span class="item-icon">•</span>
+                        <span>${l}</span>
+                    </div>
+                `).join('')}
+            </div>
+            
+            <div class="section">
+                <div class="section-title">💡 Purpose</div>
+                <div class="item">${tier1.provides}</div>
+            </div>
+        </div>
+    `;
+}
+
+function renderTier2(tier2: any): string {
+    if (!tier2) return '';
+    
+    return `
+        <div class="tier tier-2">
+            <div class="tier-header">
+                <span>🏢</span>
+                <span>TIER 2: base/${tier2.client}/</span>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">➕ Adds to Base</div>
+                <div class="item">
+                    <span class="item-icon">•</span>
+                    <span>Name Prefix: <span class="code">${tier2.namePrefix}</span></span>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">🏷️ Client Labels</div>
+                ${tier2.labels.map((l: string) => `
+                    <div class="item">
+                        <span class="item-icon">•</span>
+                        <span>${l}</span>
+                    </div>
+                `).join('')}
+            </div>
+            
+            <div class="section">
+                <div class="section-title">⚙️ Client Configuration</div>
+                ${tier2.config.map((c: string) => `
+                    <div class="item">
+                        <span class="item-icon">•</span>
+                        <span class="code">${c}</span>
+                    </div>
+                `).join('')}
+            </div>
+            
+            ${renderNetworkPolicies(tier2.networkPolicies)}
+        </div>
+    `;
+}
+
+function renderTier3(tier3: any, client: string): string {
+    return `
+        <div class="tier tier-3">
+            <div class="tier-header">
+                <span>🚀</span>
+                <span>TIER 3: overlays/${client}/${tier3.environment}/</span>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">🎯 Environment Settings</div>
+                <div class="item">
+                    <span class="item-icon">📦</span>
+                    <span>Namespace: <span class="code">${tier3.namespace}</span></span>
+                </div>
+                <div class="item">
+                    <span class="item-icon">🔢</span>
+                    <span>Replicas: <span class="code">${tier3.replicas}</span></span>
+                </div>
+                <div class="item">
+                    <span class="item-icon">🌍</span>
+                    <span>Environment: <span class="code">${tier3.environment}</span></span>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">📝 Applies Patches</div>
+                ${tier3.patches.map((p: string) => `
+                    <div class="item">
+                        <span class="item-icon">•</span>
+                        <span class="code">${p}</span>
+                    </div>
+                `).join('')}
+            </div>
+            
+            ${tier3.configMaps.length > 0 ? `
+                <div class="section">
+                    <div class="section-title">📋 Generates ConfigMaps</div>
+                    ${tier3.configMaps.map((cm: any) => `
+                        <div class="item">
+                            <span class="item-icon">•</span>
+                            <span>${cm.name || 'env-config'}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function renderNetworkPolicies(policies: any[]): string {
+    if (!policies || policies.length === 0) return '';
+    
+    return policies.map(policy => `
+        <div class="section">
+            <div class="section-title">🔒 Network Policy: ${policy.type}</div>
+            <div class="network-section">
+                ${policy.ingress.length > 0 ? `
+                    <div style="margin-bottom: 8px;">
+                        <strong class="ingress">⬇️ INGRESS</strong>
+                        ${policy.ingress.map((rule: string) => `
+                            <div class="network-rule ingress">• ${rule}</div>
                         `).join('')}
                     </div>
-                    <div class="card-section">
-                        <div class="card-section-title">🏷️ Common Labels</div>
-                        <div class="card-item">• managed-by: kustomize</div>
-                        <div class="card-item">• tier: application</div>
+                ` : ''}
+                ${policy.egress.length > 0 ? `
+                    <div>
+                        <strong class="egress">⬆️ EGRESS</strong>
+                        ${policy.egress.map((rule: string) => `
+                            <div class="network-rule egress">• ${rule}</div>
+                        `).join('')}
                     </div>
-                </div>
+                ` : ''}
             </div>
         </div>
-    `;
+    `).join('');
 }
 
-function renderTier2(project: any): string {
-    const clientBases = findClientBases(project);
-    if (clientBases.length === 0) return '';
-
+function renderFinalResult(overlay: any): string {
     return `
-        <div class="tier">
-            <div class="tier-header">🏢 TIER 2: Client-Specific Bases</div>
-            <div class="tier-content">
-                ${clientBases.map(client => `
-                    <div class="card tier-2">
-                        <div class="card-header">
-                            <span class="card-icon">📋</span>
-                            <span>${client.name}</span>
-                            <span class="badge badge-tier-2">TIER 2</span>
-                        </div>
-                        <div class="card-section">
-                            <div class="card-section-title">📄 Client Resources</div>
-                            ${(client.resources || []).map((r: string) => `
-                                <div class="card-item">• ${r}</div>
-                            `).join('')}
-                        </div>
-                        ${renderNetworkPolicies(client)}
-                        <div class="card-section">
-                            <div class="card-section-title">🏷️ Client Labels</div>
-                            <div class="card-item">• client: ${client.id}</div>
-                            <div class="card-item">• team: ${client.team || 'unknown'}</div>
-                        </div>
-                    </div>
-                `).join('')}
+        <div class="result-box">
+            <div class="result-title">✅ Final Merged Configuration for ${overlay.name}</div>
+            <div class="item">
+                <span class="item-icon">📦</span>
+                <span>Deployment: <span class="code">${overlay.tier2.namePrefix}app</span> with ${overlay.tier3.replicas} replicas</span>
+            </div>
+            <div class="item">
+                <span class="item-icon">🌐</span>
+                <span>Namespace: <span class="code">${overlay.tier3.namespace}</span></span>
+            </div>
+            <div class="item">
+                <span class="item-icon">🔒</span>
+                <span>Network: ${overlay.tier2.networkPolicies[0]?.type || 'Default'}</span>
+            </div>
+            <div class="item">
+                <span class="item-icon">⚙️</span>
+                <span>Patches: ${overlay.tier3.patches.length} applied</span>
             </div>
         </div>
     `;
-}
-
-function renderTier3(project: any): string {
-    const overlays = project.overlays || [];
-    if (overlays.length === 0) return '';
-
-    return `
-        <div class="tier">
-            <div class="tier-header">🚀 TIER 3: Environment Overlays</div>
-            <div class="tier-content">
-                ${overlays.map((overlay: any) => `
-                    <div class="card tier-3">
-                        <div class="card-header">
-                            <span class="card-icon">🎯</span>
-                            <span>${getOverlayName(overlay.path)}</span>
-                            <span class="badge badge-tier-3">TIER 3</span>
-                        </div>
-                        <div class="card-section">
-                            <div class="card-section-title">⚙️ Configuration</div>
-                            <div class="card-item">🔢 Replicas: ${getReplicaCount(overlay)}</div>
-                            <div class="card-item">📦 Namespace: ${getNamespace(overlay.path)}</div>
-                            <div class="card-item">🌍 Environment: ${getEnvironment(overlay.path)}</div>
-                        </div>
-                        <div class="card-section">
-                            <div class="card-section-title">📝 Patches</div>
-                            ${(overlay.patches || []).map((p: string) => `
-                                <div class="card-item">• ${p}</div>
-                            `).join('')}
-                            ${overlay.patches?.length === 0 ? '<div class="card-item">• deployment-patch.yaml</div>' : ''}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        </div>
-    `;
-}
-
-function renderNetworkPolicies(client: any): string {
-    const hasNetworkPolicy = client.resources?.some((r: string) => 
-        r.includes('network') || r.includes('policy')
-    );
-    
-    if (!hasNetworkPolicy) return '';
-
-    return `
-        <div class="card-section">
-            <div class="card-section-title">🔒 Network Policies</div>
-            <div class="network-policy">
-                <div class="network-rule ingress">
-                    ⬇️ INGRESS: API Gateway → Port 8080
-                </div>
-                <div class="network-rule egress">
-                    ⬆️ EGRESS: Database, Cache, DNS
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-function renderInheritanceExamples(project: any): string {
-    const overlays = project.overlays || [];
-    if (overlays.length === 0) return '';
-
-    const firstOverlay = overlays[0];
-    const overlayName = getOverlayName(firstOverlay.path);
-
-    return `
-        <div class="card-section" style="margin-top: 30px;">
-            <div class="tier-header">🔗 Example Inheritance Flow</div>
-            <div class="inheritance-path">
-                <div class="inheritance-node">📦 Base<br/><small>deployment.yaml<br/>service.yaml</small></div>
-                <div class="inheritance-arrow">→</div>
-                <div class="inheritance-node">📋 Client Base<br/><small>+ network-policy<br/>+ client labels</small></div>
-                <div class="inheritance-arrow">→</div>
-                <div class="inheritance-node">🎯 ${overlayName}<br/><small>+ namespace<br/>+ patches<br/>+ replicas</small></div>
-            </div>
-        </div>
-    `;
-}
-
-function findClientBases(project: any): any[] {
-    // This is a simplified version - in reality we'd parse the actual client bases
-    const clients = [
-        { id: 'client-a', name: 'Client A', team: 'platform-team', resources: ['db-network.yml'] },
-        { id: 'client-b', name: 'Client B', team: 'data-team', resources: ['api-network.yml'] }
-    ];
-    return clients;
-}
-
-function getOverlayName(path: string): string {
-    const parts = path.split(/[/\\]/);
-    const clientIdx = parts.findIndex(p => p.startsWith('client-'));
-    if (clientIdx >= 0 && clientIdx < parts.length - 1) {
-        const client = parts[clientIdx];
-        const env = parts[clientIdx + 1];
-        return `${client} / ${env}`;
-    }
-    return path;
-}
-
-function getNamespace(path: string): string {
-    const parts = path.split(/[/\\]/);
-    const clientIdx = parts.findIndex(p => p.startsWith('client-'));
-    if (clientIdx >= 0) {
-        const client = parts[clientIdx];
-        const env = parts[clientIdx + 1] || 'unknown';
-        return `${client}-${env}`;
-    }
-    return 'default';
-}
-
-function getEnvironment(path: string): string {
-    const parts = path.split(/[/\\]/);
-    const env = parts.find(p => p === 'dev' || p === 'prod' || p === 'staging');
-    return env || 'unknown';
-}
-
-function getReplicaCount(overlay: any): number {
-    // Try to extract from content
-    const content = overlay.content;
-    if (content?.replicas && Array.isArray(content.replicas)) {
-        return content.replicas[0]?.count || 1;
-    }
-    return 1;
 }
 
 export function deactivate() {}
