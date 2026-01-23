@@ -1,39 +1,36 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api
+  name: worker
   labels:
-    app: api
+    app: worker
     tier: backend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
-      app: api
+      app: worker
   template:
     metadata:
       labels:
-        app: api
+        app: worker
         tier: backend
     spec:
       containers:
-      - name: api
+      - name: worker
         image: nginx:1.21
-        ports:
-        - containerPort: 8080
-          name: http
         envFrom:
         - configMapRef:
             name: common-config
         env:
         - name: SERVICE_NAME
-          value: "api"
-        - name: LOG_LEVEL
-          value: "INFO"
+          value: "worker"
+        - name: QUEUE_NAME
+          value: "default"
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
             memory: "256Mi"
             cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "400m"

@@ -5,24 +5,28 @@ kind: Kustomization
 bases:
 - ../../../base/client-b
 
-namespace: client-b-prod
-
 commonLabels:
   environment: prod
 
 replicas:
-- name: app
+- name: api
   count: 7
+- name: worker
+  count: 5
+- name: frontend
+  count: 5
 
 patchesStrategicMerge:
-- deployment-patch.yaml
+- api-patch.yaml
+- worker-patch.yaml
+- frontend-patch.yaml
 
 configMapGenerator:
 - name: env-config
-  behavior: merge
   literals:
   - ENVIRONMENT=production
   - LOG_LEVEL=ERROR
   - API_ENDPOINT=https://api.client-b.example.com
   - EXTERNAL_API_URL=https://external.api.example.com
   - MONITORING_ENABLED=true
+  - CDN_ENABLED=true

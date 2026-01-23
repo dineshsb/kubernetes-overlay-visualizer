@@ -8,18 +8,25 @@ bases:
 # Client A specific resources
 resources:
 - db-network.yml
+- deployment-analytics.yaml
 
 namePrefix: client-a-
+
+namespace: shared-platform
 
 commonLabels:
   client: client-a
   team: platform-team
   
-# Client A uses specific database configuration
+# Client A specific configuration
 configMapGenerator:
 - name: client-config
   literals:
   - CLIENT_ID=client-a
-  - TENANT=client-a
+  - CLIENT_NAME=Client A Corporation
+  - TENANT_ID=tenant-a-001
+  - DATABASE_HOST=postgres.client-a.svc
+  - DATABASE_NAME=client_a_db
   - DATABASE_TYPE=postgresql
+  - CACHE_HOST=redis.client-a.svc
   - CACHE_ENABLED=true

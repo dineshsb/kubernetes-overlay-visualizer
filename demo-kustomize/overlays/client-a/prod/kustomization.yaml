@@ -5,21 +5,24 @@ kind: Kustomization
 bases:
 - ../../../base/client-a
 
-namespace: client-a-prod
-
 commonLabels:
   environment: prod
 
 replicas:
-- name: app
+- name: api
   count: 5
+- name: worker
+  count: 3
+- name: analytics
+  count: 2
 
 patchesStrategicMerge:
-- deployment-patch.yaml
+- api-patch.yaml
+- worker-patch.yaml
+- analytics-patch.yaml
 
 configMapGenerator:
 - name: env-config
-  behavior: merge
   literals:
   - ENVIRONMENT=production
   - LOG_LEVEL=WARN

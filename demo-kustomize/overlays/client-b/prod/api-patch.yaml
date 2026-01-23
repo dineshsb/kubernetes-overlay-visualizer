@@ -1,36 +1,32 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: app
+  name: api
   annotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8080"
+    prometheus.io/port: "9090"
 spec:
   template:
     spec:
       containers:
-      - name: app
+      - name: api
         image: nginx:1.22-alpine
         env:
         - name: ENVIRONMENT
           value: "production"
-        - name: CLIENT_NAME
-          value: "Client B"
-        - name: FEATURE_FLAGS
-          value: "feature-x,feature-y,feature-z,premium-features,api-integration"
         - name: ENABLE_CACHING
-          value: "true"
-        - name: ENABLE_MONITORING
           value: "true"
         - name: CACHE_TTL
           value: "3600"
+        - name: MAX_CONNECTIONS
+          value: "2000"
         resources:
           requests:
-            memory: "768Mi"
-            cpu: "750m"
+            memory: "512Mi"
+            cpu: "500m"
           limits:
-            memory: "1.5Gi"
-            cpu: "1500m"
+            memory: "1Gi"
+            cpu: "1000m"
         livenessProbe:
           httpGet:
             path: /health

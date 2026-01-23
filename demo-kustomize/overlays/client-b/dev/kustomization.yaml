@@ -5,23 +5,25 @@ kind: Kustomization
 bases:
 - ../../../base/client-b
 
-namespace: client-b-dev
-
 commonLabels:
   environment: dev
 
 replicas:
-- name: app
+- name: api
+  count: 2
+- name: worker
+  count: 1
+- name: frontend
   count: 2
 
 patchesStrategicMerge:
-- deployment-patch.yaml
+- api-patch.yaml
+- frontend-patch.yaml
 
 configMapGenerator:
 - name: env-config
-  behavior: merge
   literals:
-  - ENVIRONMENT=dev
+  - ENVIRONMENT=development
   - LOG_LEVEL=DEBUG
   - API_ENDPOINT=https://api.client-b.dev.example.com
   - EXTERNAL_API_URL=https://external-dev.api.example.com

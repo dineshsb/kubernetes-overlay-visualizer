@@ -8,19 +8,27 @@ bases:
 # Client B specific resources
 resources:
 - api-network.yml
+- deployment-frontend.yaml
 
 namePrefix: client-b-
+
+namespace: shared-platform
 
 commonLabels:
   client: client-b
   team: data-team
 
-# Client B uses API-heavy configuration
+# Client B specific configuration
 configMapGenerator:
 - name: client-config
   literals:
   - CLIENT_ID=client-b
-  - TENANT=client-b
+  - CLIENT_NAME=Client B Industries
+  - TENANT_ID=tenant-b-002
+  - DATABASE_HOST=mysql.client-b.svc
+  - DATABASE_NAME=client_b_db
   - DATABASE_TYPE=mysql
   - EXTERNAL_API_ENABLED=true
+  - EXTERNAL_API_URL=https://api.external.com
   - RATE_LIMIT=1000
+  - S3_BUCKET=client-b-data

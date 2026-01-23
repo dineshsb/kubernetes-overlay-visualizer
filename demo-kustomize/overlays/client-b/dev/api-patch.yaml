@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        image: nginx:1.22-alpine
+        env:
+        - name: ENVIRONMENT
+          value: "development"
+        - name: ENABLE_SWAGGER
+          value: "true"
+        - name: CORS_ENABLED
+          value: "true"

@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    spec:
+      containers:
+      - name: frontend
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: CDN_URL
+          value: "https://cdn.client-b.com"
+        - name: ENABLE_ANALYTICS
+          value: "true"
+        - name: MINIFY_ASSETS
+          value: "true"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

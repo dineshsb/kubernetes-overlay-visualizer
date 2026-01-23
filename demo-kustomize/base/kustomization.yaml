@@ -3,9 +3,10 @@ kind: Kustomization
 
 resources:
 - deployment.yaml
+- deployment-worker.yaml
 - service.yaml
 - configmap.yaml
 
 commonLabels:
   managed-by: kustomize
-  tier: application
+  platform: multi-tenant

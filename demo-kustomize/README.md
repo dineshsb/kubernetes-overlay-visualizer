@@ -1,9 +1,69 @@
 # Demo Kustomize Project Structure
 
-This demo showcases a realistic multi-tenant Kustomize setup with a **3-tier inheritance hierarchy**:
-1. **Common base** - Shared by all clients
-2. **Client-specific base** - Inherits common base + client-specific settings
-3. **Environment overlays** - Inherits client base + environment-specific configs
+This demo showcases a realistic multi-tenant Kustomize setup with **multiple workloads**, **shared environment variables**, and a **3-tier inheritance hierarchy**.
+
+## Workload Architecture
+
+### Common Base Workloads (`base/`)
+- **api**: Backend API service (2 replicas)
+- **worker**: Background job processor (1 replica)
+
+### Client A Workloads (`base/client-a/`)
+Inherits: api, worker
+Adds:
+- **analytics**: Data analytics engine (1 replica)
+
+### Client B Workloads (`base/client-b/`)
+Inherits: api, worker
+Adds:
+- **frontend**: Web frontend application (2 replicas)
+
+## Shared Configuration
+
+### Common ConfigMap (`base/configmap.yaml`)
+All workloads inherit these environment variables:
+```yaml
+PLATFORM_NAME: "Multi-Tenant Platform"
+API_VERSION: "v1"
+METRICS_ENABLED: "true"
+METRICS_PORT: "9090"
+HEALTH_CHECK_PATH: "/health"
+READINESS_CHECK_PATH: "/ready"
+LOG_FORMAT: "json"
+TIMEZONE: "UTC"
+ENABLE_TRACING: "true"
+TRACE_SAMPLING_RATE: "0.1"
+```
+
+### Client-Specific ConfigMap
+Each client adds their own configuration:
+
+**Client A** (`base/client-a/`):
+```yaml
+CLIENT_ID: client-a
+CLIENT_NAME: Client A Corporation
+DATABASE_HOST: postgres.client-a.svc
+DATABASE_TYPE: postgresql
+CACHE_HOST: redis.client-a.svc
+```
+
+**Client B** (`base/client-b/`):
+```yaml
+CLIENT_ID: client-b
+CLIENT_NAME: Client B Industries
+DATABASE_HOST: mysql.client-b.svc
+DATABASE_TYPE: mysql
+EXTERNAL_API_URL: https://api.external.com
+S3_BUCKET: client-b-data
+```
+
+## Single Namespace Architecture
+
+All deployments use: **`shared-platform`** namespace
+
+Workload naming:
+- Client A: `client-a-api`, `client-a-worker`, `client-a-analytics`
+- Client B: `client-b-api`, `client-b-worker`, `client-b-frontend`
 
 ## Structure Overview
 

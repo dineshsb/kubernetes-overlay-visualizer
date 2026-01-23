@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    spec:
+      containers:
+      - name: frontend
+        env:
+        - name: ENVIRONMENT
+          value: "development"
+        - name: HOT_RELOAD
+          value: "true"
+        - name: SOURCE_MAPS
+          value: "true"

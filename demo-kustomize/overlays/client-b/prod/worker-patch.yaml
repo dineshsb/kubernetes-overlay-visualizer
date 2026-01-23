@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  template:
+    spec:
+      containers:
+      - name: worker
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: WORKER_THREADS
+          value: "12"
+        - name: BATCH_SIZE
+          value: "100"
+        resources:
+          requests:
+            memory: "768Mi"
+            cpu: "750m"
+          limits:
+            memory: "1.5Gi"
+            cpu: "1500m"

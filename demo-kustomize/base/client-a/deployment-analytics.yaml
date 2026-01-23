@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics
+  labels:
+    app: analytics
+    tier: analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics
+  template:
+    metadata:
+      labels:
+        app: analytics
+        tier: analytics
+    spec:
+      containers:
+      - name: analytics
+        image: nginx:1.21-alpine
+        envFrom:
+        - configMapRef:
+            name: common-config
+        - configMapRef:
+            name: client-config
+        env:
+        - name: SERVICE_NAME
+          value: "analytics"
+        - name: ANALYTICS_ENGINE
+          value: "spark"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"

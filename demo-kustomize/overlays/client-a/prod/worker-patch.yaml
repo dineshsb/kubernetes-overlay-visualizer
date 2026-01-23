@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  template:
+    spec:
+      containers:
+      - name: worker
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: WORKER_THREADS
+          value: "8"
+        - name: QUEUE_POLL_INTERVAL
+          value: "1s"
+        - name: MAX_RETRIES
+          value: "3"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
