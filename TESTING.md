@@ -31,7 +31,7 @@ In the Extension Development Host window:
 1. Open the `demo-kustomize` folder from this project
 2. You should see "Kustomize Overlays" in the Explorer sidebar
 3. Expand it to see the project structure:
-   - **agent-testing** (project)
+   - **demo-kustomize** (project)
      - **base** (base configuration)
        - Resources (2): deployment.yaml, service.yaml
      - **Overlays** (folder)
