@@ -1,0 +1,69 @@
+{
+  "name": "kubernetes-overlay-visualizer",
+  "displayName": "Kubernetes Overlay Visualizer",
+  "description": "Visualize Kustomize overlay structures and dependencies",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/kustomization.yaml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "kustomize-visualizer.visualize",
+        "title": "Visualize Kustomize Overlays",
+        "category": "Kustomize"
+      },
+      {
+        "command": "kustomize-visualizer.refresh",
+        "title": "Refresh Visualization",
+        "category": "Kustomize",
+        "icon": "$(refresh)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "kustomizeOverlayView",
+          "name": "Kustomize Overlays"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "kustomize-visualizer.refresh",
+          "when": "view == kustomizeOverlayView",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
