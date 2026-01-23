@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.22-alpine
+        env:
+        - name: ENVIRONMENT
+          value: "dev"
+        - name: CLIENT_NAME
+          value: "Client B"
+        - name: FEATURE_FLAGS
+          value: "feature-x,feature-y,feature-z"
+        - name: ENABLE_CACHING
+          value: "true"
+        resources:
+          requests:
+            memory: "192Mi"
+            cpu: "150m"
+          limits:
+            memory: "384Mi"
+            cpu: "400m"

@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.22-alpine
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: CLIENT_NAME
+          value: "Client B"
+        - name: FEATURE_FLAGS
+          value: "feature-x,feature-y,feature-z,premium-features"
+        - name: ENABLE_CACHING
+          value: "true"
+        - name: ENABLE_MONITORING
+          value: "true"
+        - name: CACHE_TTL
+          value: "3600"
+        resources:
+          requests:
+            memory: "768Mi"
+            cpu: "750m"
+          limits:
+            memory: "1.5Gi"
+            cpu: "1500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
