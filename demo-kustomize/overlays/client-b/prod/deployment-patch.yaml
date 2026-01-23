@@ -17,7 +17,7 @@ spec:
         - name: CLIENT_NAME
           value: "Client B"
         - name: FEATURE_FLAGS
-          value: "feature-x,feature-y,feature-z,premium-features"
+          value: "feature-x,feature-y,feature-z,premium-features,api-integration"
         - name: ENABLE_CACHING
           value: "true"
         - name: ENABLE_MONITORING

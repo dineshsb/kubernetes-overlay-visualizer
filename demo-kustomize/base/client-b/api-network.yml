@@ -1,48 +1,50 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: client-a-network-policy
+  name: api-network-policy
 spec:
   podSelector:
     matchLabels:
-      client: client-a
+      client: client-b
   policyTypes:
-  - Ingress
   - Egress
+  - Ingress
   ingress:
+  # Allow API gateway to reach this service
   - from:
     - namespaceSelector:
         matchLabels:
-          name: ingress-nginx
+          name: api-gateway
     ports:
     - protocol: TCP
       port: 8080
   egress:
-  # Production database
+  # Allow access to MySQL database
   - to:
     - namespaceSelector:
         matchLabels:
-          name: database-prod
-    ports:
-    - protocol: TCP
-      port: 5432
-  # Redis cache
-  - to:
+          name: database
     - podSelector:
         matchLabels:
-          app: redis
+          app: mysql
     ports:
     - protocol: TCP
-      port: 6379
-  # Monitoring endpoints
+      port: 3306
+  # Allow access to external APIs
   - to:
     - namespaceSelector:
         matchLabels:
-          name: monitoring
+          name: external-services
     ports:
     - protocol: TCP
-      port: 9090
-  # DNS
+      port: 443
+  # Allow S3 access for Client B
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+  # DNS access
   - to:
     - namespaceSelector:
         matchLabels:

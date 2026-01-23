@@ -1,31 +1,27 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Inherit from Client A base
 bases:
-- ../../../base
-
-namePrefix: prod-client-a-
+- ../../../base/client-a
 
 namespace: client-a-prod
 
 commonLabels:
-  client: client-a
   environment: prod
 
 replicas:
 - name: app
   count: 5
 
-resources:
-- network-policy.yaml
-
 patchesStrategicMerge:
 - deployment-patch.yaml
 
 configMapGenerator:
-- name: client-config
+- name: env-config
+  behavior: merge
   literals:
-  - CLIENT_ID=client-a
-  - TENANT=client-a
-  - API_ENDPOINT=https://api.client-a.example.com
+  - ENVIRONMENT=production
   - LOG_LEVEL=WARN
+  - API_ENDPOINT=https://api.client-a.example.com
+  - MONITORING_ENABLED=true

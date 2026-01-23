@@ -7,18 +7,20 @@ spec:
     spec:
       containers:
       - name: app
-        image: nginx:1.21-alpine
+        image: nginx:1.22-alpine
         env:
         - name: ENVIRONMENT
           value: "dev"
         - name: CLIENT_NAME
-          value: "Client A"
+          value: "Client B"
         - name: FEATURE_FLAGS
-          value: "feature-a,feature-b"
+          value: "feature-x,feature-y,api-integration"
+        - name: ENABLE_CACHING
+          value: "false"
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "200m"
+            memory: "192Mi"
+            cpu: "150m"
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "384Mi"
+            cpu: "400m"
