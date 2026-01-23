@@ -141,6 +141,12 @@ async function getClientBaseContributions(overlayDir: string, project: any): Pro
 }
 
 function getWebviewContent(overlays: any[]): string {
+    const overlayOptions = overlays.map(o => ({
+        value: o.name,
+        label: o.name,
+        data: JSON.stringify(o)
+    }));
+
     return `<!DOCTYPE html>
     <html lang="en">
     <head>
@@ -148,33 +154,42 @@ function getWebviewContent(overlays: any[]): string {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Kustomize Visualization</title>
         <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
                 font-family: var(--vscode-font-family);
                 color: var(--vscode-foreground);
                 background-color: var(--vscode-editor-background);
                 padding: 20px;
             }
-            h1 {
-                margin-bottom: 10px;
-                font-size: 24px;
-            }
-            .subtitle {
-                color: var(--vscode-descriptionForeground);
+            .controls {
                 margin-bottom: 30px;
-            }
-            .overlay-container {
-                margin-bottom: 50px;
-                border: 2px solid var(--vscode-panel-border);
-                border-radius: 10px;
                 padding: 20px;
                 background: var(--vscode-editorWidget-background);
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                gap: 15px;
             }
-            .overlay-header {
+            .controls label {
+                font-weight: bold;
+                font-size: 14px;
+            }
+            .controls select {
+                padding: 8px 12px;
+                background: var(--vscode-input-background);
+                color: var(--vscode-input-foreground);
+                border: 1px solid var(--vscode-input-border);
+                border-radius: 4px;
+                font-size: 14px;
+                min-width: 250px;
+            }
+            .diagram-container {
+                display: none;
+            }
+            .diagram-container.active {
+                display: block;
+            }
+            .header {
                 font-size: 20px;
                 font-weight: bold;
                 margin-bottom: 20px;
@@ -190,344 +205,353 @@ function getWebviewContent(overlays: any[]): string {
             }
             .env-dev { background: #FF9800; color: white; }
             .env-prod { background: #4CAF50; color: white; }
-            .tiers {
+            
+            /* Architecture Diagram */
+            .architecture {
                 display: flex;
-                gap: 20px;
-                margin-top: 20px;
+                gap: 40px;
+                margin: 30px 0;
+                justify-content: center;
             }
-            .tier {
-                flex: 1;
-                background: var(--vscode-editor-background);
-                border: 2px solid var(--vscode-panel-border);
-                border-radius: 8px;
-                padding: 15px;
-                min-width: 300px;
+            .deployment-box {
+                background: var(--vscode-editorWidget-background);
+                border: 3px solid #2196F3;
+                border-radius: 12px;
+                padding: 20px;
+                min-width: 400px;
             }
-            .tier-header {
-                font-size: 14px;
+            .deployment-header {
+                font-size: 16px;
                 font-weight: bold;
                 margin-bottom: 15px;
-                padding-bottom: 8px;
-                border-bottom: 2px solid var(--vscode-panel-border);
+                color: #2196F3;
+                text-align: center;
+            }
+            .pods {
                 display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                justify-content: center;
+                margin: 20px 0;
+            }
+            .pod {
+                width: 80px;
+                height: 80px;
+                background: #4CAF50;
+                border-radius: 8px;
+                display: flex;
+                flex-direction: column;
                 align-items: center;
-                gap: 8px;
-            }
-            .tier-1 { border-color: #4CAF50; }
-            .tier-1 .tier-header { color: #4CAF50; border-color: #4CAF50; }
-            .tier-2 { border-color: #2196F3; }
-            .tier-2 .tier-header { color: #2196F3; border-color: #2196F3; }
-            .tier-3 { border-color: #FF9800; }
-            .tier-3 .tier-header { color: #FF9800; border-color: #FF9800; }
-            .section {
-                margin: 12px 0;
-            }
-            .section-title {
-                font-size: 11px;
-                text-transform: uppercase;
-                color: var(--vscode-descriptionForeground);
-                margin-bottom: 6px;
+                justify-content: center;
+                color: white;
                 font-weight: bold;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.3);
             }
-            .item {
+            .pod-icon {
+                font-size: 32px;
+            }
+            .pod-label {
+                font-size: 10px;
+                margin-top: 5px;
+            }
+            .deployment-info {
+                margin-top: 15px;
+                padding: 10px;
+                background: var(--vscode-editor-background);
+                border-radius: 6px;
                 font-size: 12px;
+            }
+            .info-item {
                 padding: 4px 0;
                 display: flex;
-                align-items: flex-start;
-                gap: 6px;
+                justify-content: space-between;
             }
-            .item-icon {
-                color: var(--vscode-textLink-foreground);
-                min-width: 16px;
+            .info-label {
+                color: var(--vscode-descriptionForeground);
             }
-            .network-section {
-                margin-top: 10px;
-                padding: 10px;
-                background: var(--vscode-editorWidget-background);
-                border-radius: 5px;
-            }
-            .network-rule {
-                font-size: 11px;
-                padding: 3px 0;
-                display: flex;
-                align-items: center;
-                gap: 6px;
-            }
-            .ingress { color: #4CAF50; }
-            .egress { color: #FF9800; }
-            .code {
+            .info-value {
+                font-weight: bold;
                 font-family: monospace;
-                background: var(--vscode-textCodeBlock-background);
-                padding: 2px 6px;
-                border-radius: 3px;
-                font-size: 11px;
             }
-            .arrow-flow {
+            
+            /* Network Diagram */
+            .network-diagram {
+                margin: 40px 0;
+                padding: 30px;
+                background: var(--vscode-editorWidget-background);
+                border-radius: 12px;
+            }
+            .network-title {
+                font-size: 18px;
+                font-weight: bold;
+                margin-bottom: 25px;
+                text-align: center;
+                color: #FF9800;
+            }
+            .network-flow {
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: 15px;
+                gap: 30px;
                 margin: 20px 0;
-                padding: 15px;
+            }
+            .network-node {
+                min-width: 150px;
+                padding: 20px;
                 background: var(--vscode-editor-background);
+                border: 2px solid var(--vscode-panel-border);
                 border-radius: 8px;
-            }
-            .flow-step {
                 text-align: center;
-                padding: 10px;
             }
-            .flow-arrow {
-                font-size: 24px;
+            .network-node.ingress {
+                border-color: #4CAF50;
+            }
+            .network-node.pod {
+                border-color: #2196F3;
+                background: #2196F3;
+                color: white;
+            }
+            .network-node.egress {
+                border-color: #FF9800;
+            }
+            .network-arrow {
+                font-size: 36px;
                 color: var(--vscode-textLink-foreground);
             }
-            .result-box {
-                margin-top: 20px;
+            .arrow-green { color: #4CAF50; }
+            .arrow-orange { color: #FF9800; }
+            .network-label {
+                font-size: 11px;
+                color: var(--vscode-descriptionForeground);
+                margin-top: 5px;
+            }
+            .network-details {
+                font-size: 10px;
+                margin-top: 8px;
+                padding: 8px;
+                background: var(--vscode-editor-background);
+                border-radius: 4px;
+            }
+            
+            /* Inheritance Layers */
+            .layers {
+                display: flex;
+                gap: 20px;
+                margin: 30px 0;
+            }
+            .layer {
+                flex: 1;
                 padding: 15px;
                 background: var(--vscode-editorWidget-background);
-                border: 2px solid var(--vscode-charts-green);
                 border-radius: 8px;
+                border-left: 4px solid;
             }
-            .result-title {
+            .layer.tier-1 { border-color: #4CAF50; }
+            .layer.tier-2 { border-color: #2196F3; }
+            .layer.tier-3 { border-color: #FF9800; }
+            .layer-title {
                 font-weight: bold;
-                color: var(--vscode-charts-green);
                 margin-bottom: 10px;
+                font-size: 12px;
+            }
+            .layer-items {
+                font-size: 11px;
+            }
+            .layer-item {
+                padding: 3px 0;
+                display: flex;
+                align-items: start;
+                gap: 5px;
+            }
+            .layer-item-bullet {
+                color: var(--vscode-textLink-foreground);
             }
         </style>
     </head>
     <body>
-        <h1>🎯 Kustomize Overlay Build Analysis</h1>
-        <div class="subtitle">See what each layer contributes to your final configuration</div>
-        
-        ${overlays.length === 0 ? '<p>No overlays found. Open a folder with Kustomize configurations.</p>' : ''}
-        ${overlays.map(overlay => renderOverlay(overlay)).join('')}
+        <div class="controls">
+            <label for="overlay-select">📦 Select Overlay to Visualize:</label>
+            <select id="overlay-select" onchange="showDiagram(this.value)">
+                <option value="">-- Choose an overlay --</option>
+                ${overlayOptions.map((opt, idx) => `
+                    <option value="${idx}">${opt.label}</option>
+                `).join('')}
+            </select>
+        </div>
+
+        ${overlays.map((overlay, idx) => renderDiagram(overlay, idx)).join('')}
+
+        <script>
+            const overlaysData = ${JSON.stringify(overlays)};
+            
+            function showDiagram(index) {
+                document.querySelectorAll('.diagram-container').forEach(el => {
+                    el.classList.remove('active');
+                });
+                if (index !== '') {
+                    const diagram = document.getElementById('diagram-' + index);
+                    if (diagram) {
+                        diagram.classList.add('active');
+                    }
+                }
+            }
+        </script>
     </body>
     </html>`;
 }
 
-function renderOverlay(overlay: any): string {
-    return `
-        <div class="overlay-container">
-            <div class="overlay-header">
-                <span>📦 ${overlay.name}</span>
-                <span class="env-badge env-${overlay.environment}">${overlay.environment.toUpperCase()}</span>
-            </div>
-            
-            ${renderInheritanceFlow(overlay)}
-            
-            <div class="tiers">
-                ${renderTier1(overlay.tier1)}
-                ${renderTier2(overlay.tier2)}
-                ${renderTier3(overlay.tier3, overlay.client)}
-            </div>
-            
-            ${renderFinalResult(overlay)}
-        </div>
-    `;
-}
-
-function renderInheritanceFlow(overlay: any): string {
-    return `
-        <div class="arrow-flow">
-            <div class="flow-step">
-                <div style="font-size: 32px;">📦</div>
-                <div style="font-size: 12px; margin-top: 5px;">base/</div>
-            </div>
-            <div class="flow-arrow">→</div>
-            <div class="flow-step">
-                <div style="font-size: 32px;">📋</div>
-                <div style="font-size: 12px; margin-top: 5px;">base/${overlay.client}/</div>
-            </div>
-            <div class="flow-arrow">→</div>
-            <div class="flow-step">
-                <div style="font-size: 32px;">🎯</div>
-                <div style="font-size: 12px; margin-top: 5px;">overlays/${overlay.name}</div>
-            </div>
-            <div class="flow-arrow">=</div>
-            <div class="flow-step">
-                <div style="font-size: 32px;">✅</div>
-                <div style="font-size: 12px; margin-top: 5px;">Final Config</div>
-            </div>
-        </div>
-    `;
-}
-
-function renderTier1(tier1: any): string {
-    if (!tier1) return '';
+function renderDiagram(overlay: any, index: number): string {
+    const replicas = overlay.tier3?.replicas || 1;
+    const namespace = overlay.tier3?.namespace || 'default';
+    const deploymentName = `${overlay.tier2?.namePrefix || ''}app`;
     
     return `
-        <div class="tier tier-1">
-            <div class="tier-header">
-                <span>🏛️</span>
-                <span>TIER 1: base/</span>
+        <div id="diagram-${index}" class="diagram-container">
+            <div class="header">
+                <span>🎯 ${overlay.name}</span>
+                <span class="env-badge env-${overlay.environment}">${overlay.environment?.toUpperCase()}</span>
             </div>
-            
-            <div class="section">
-                <div class="section-title">📄 Provides Resources</div>
-                ${tier1.resources.map((r: string) => `
-                    <div class="item">
-                        <span class="item-icon">•</span>
-                        <span class="code">${r}</span>
-                    </div>
-                `).join('')}
-            </div>
-            
-            <div class="section">
-                <div class="section-title">🏷️ Common Labels</div>
-                ${tier1.labels.map((l: string) => `
-                    <div class="item">
-                        <span class="item-icon">•</span>
-                        <span>${l}</span>
-                    </div>
-                `).join('')}
-            </div>
-            
-            <div class="section">
-                <div class="section-title">💡 Purpose</div>
-                <div class="item">${tier1.provides}</div>
-            </div>
-        </div>
-    `;
-}
 
-function renderTier2(tier2: any): string {
-    if (!tier2) return '';
-    
-    return `
-        <div class="tier tier-2">
-            <div class="tier-header">
-                <span>🏢</span>
-                <span>TIER 2: base/${tier2.client}/</span>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">➕ Adds to Base</div>
-                <div class="item">
-                    <span class="item-icon">•</span>
-                    <span>Name Prefix: <span class="code">${tier2.namePrefix}</span></span>
-                </div>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">🏷️ Client Labels</div>
-                ${tier2.labels.map((l: string) => `
-                    <div class="item">
-                        <span class="item-icon">•</span>
-                        <span>${l}</span>
+            <!-- Deployment Architecture -->
+            <div class="architecture">
+                <div class="deployment-box">
+                    <div class="deployment-header">
+                        🚀 Deployment: ${deploymentName}
                     </div>
-                `).join('')}
-            </div>
-            
-            <div class="section">
-                <div class="section-title">⚙️ Client Configuration</div>
-                ${tier2.config.map((c: string) => `
-                    <div class="item">
-                        <span class="item-icon">•</span>
-                        <span class="code">${c}</span>
+                    <div class="pods">
+                        ${Array(Math.min(replicas, 8)).fill(0).map((_, i) => `
+                            <div class="pod">
+                                <div class="pod-icon">📦</div>
+                                <div class="pod-label">Pod ${i + 1}</div>
+                            </div>
+                        `).join('')}
+                        ${replicas > 8 ? `<div class="pod">+${replicas - 8}</div>` : ''}
                     </div>
-                `).join('')}
-            </div>
-            
-            ${renderNetworkPolicies(tier2.networkPolicies)}
-        </div>
-    `;
-}
-
-function renderTier3(tier3: any, client: string): string {
-    return `
-        <div class="tier tier-3">
-            <div class="tier-header">
-                <span>🚀</span>
-                <span>TIER 3: overlays/${client}/${tier3.environment}/</span>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">🎯 Environment Settings</div>
-                <div class="item">
-                    <span class="item-icon">📦</span>
-                    <span>Namespace: <span class="code">${tier3.namespace}</span></span>
-                </div>
-                <div class="item">
-                    <span class="item-icon">🔢</span>
-                    <span>Replicas: <span class="code">${tier3.replicas}</span></span>
-                </div>
-                <div class="item">
-                    <span class="item-icon">🌍</span>
-                    <span>Environment: <span class="code">${tier3.environment}</span></span>
-                </div>
-            </div>
-            
-            <div class="section">
-                <div class="section-title">📝 Applies Patches</div>
-                ${tier3.patches.map((p: string) => `
-                    <div class="item">
-                        <span class="item-icon">•</span>
-                        <span class="code">${p}</span>
-                    </div>
-                `).join('')}
-            </div>
-            
-            ${tier3.configMaps.length > 0 ? `
-                <div class="section">
-                    <div class="section-title">📋 Generates ConfigMaps</div>
-                    ${tier3.configMaps.map((cm: any) => `
-                        <div class="item">
-                            <span class="item-icon">•</span>
-                            <span>${cm.name || 'env-config'}</span>
+                    <div class="deployment-info">
+                        <div class="info-item">
+                            <span class="info-label">Namespace:</span>
+                            <span class="info-value">${namespace}</span>
                         </div>
-                    `).join('')}
+                        <div class="info-item">
+                            <span class="info-label">Replicas:</span>
+                            <span class="info-value">${replicas}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Name:</span>
+                            <span class="info-value">${deploymentName}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Environment:</span>
+                            <span class="info-value">${overlay.environment}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Network Flow Diagram -->
+            ${renderNetworkFlow(overlay)}
+
+            <!-- Inheritance Layers -->
+            <div class="layers">
+                ${renderLayer(overlay.tier1, 'tier-1', '🏛️ Base', 'Common resources for all clients')}
+                ${renderLayer(overlay.tier2, 'tier-2', `🏢 ${overlay.client}`, 'Client-specific configuration')}
+                ${renderLayer(overlay.tier3, 'tier-3', `🚀 ${overlay.environment}`, 'Environment-specific overrides')}
+            </div>
+        </div>
+    `;
+}
+
+function renderNetworkFlow(overlay: any): string {
+    const networkPolicies = overlay.tier2?.networkPolicies || [];
+    if (networkPolicies.length === 0) return '';
+
+    const policy = networkPolicies[0];
+    
+    return `
+        <div class="network-diagram">
+            <div class="network-title">🔒 Network Policy: ${policy.type}</div>
+            
+            <!-- Ingress Flow -->
+            ${policy.ingress.length > 0 ? `
+                <div class="network-flow">
+                    <div class="network-node ingress">
+                        <div style="font-size: 32px;">🌐</div>
+                        <div style="font-weight: bold; margin-top: 8px;">Ingress</div>
+                        <div class="network-details">
+                            ${policy.ingress.map((rule: string) => `
+                                <div>• ${rule}</div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div class="network-arrow arrow-green">→</div>
+                    <div class="network-node pod">
+                        <div style="font-size: 32px;">📦</div>
+                        <div style="font-weight: bold; margin-top: 8px;">Pods</div>
+                    </div>
+                </div>
+            ` : ''}
+
+            <!-- Egress Flow -->
+            ${policy.egress.length > 0 ? `
+                <div class="network-flow">
+                    <div class="network-node pod">
+                        <div style="font-size: 32px;">📦</div>
+                        <div style="font-weight: bold; margin-top: 8px;">Pods</div>
+                    </div>
+                    <div class="network-arrow arrow-orange">→</div>
+                    <div class="network-node egress">
+                        <div style="font-size: 32px;">🔗</div>
+                        <div style="font-weight: bold; margin-top: 8px;">Egress</div>
+                        <div class="network-details">
+                            ${policy.egress.map((rule: string) => `
+                                <div>• ${rule}</div>
+                            `).join('')}
+                        </div>
+                    </div>
                 </div>
             ` : ''}
         </div>
     `;
 }
 
-function renderNetworkPolicies(policies: any[]): string {
-    if (!policies || policies.length === 0) return '';
-    
-    return policies.map(policy => `
-        <div class="section">
-            <div class="section-title">🔒 Network Policy: ${policy.type}</div>
-            <div class="network-section">
-                ${policy.ingress.length > 0 ? `
-                    <div style="margin-bottom: 8px;">
-                        <strong class="ingress">⬇️ INGRESS</strong>
-                        ${policy.ingress.map((rule: string) => `
-                            <div class="network-rule ingress">• ${rule}</div>
-                        `).join('')}
-                    </div>
-                ` : ''}
-                ${policy.egress.length > 0 ? `
-                    <div>
-                        <strong class="egress">⬆️ EGRESS</strong>
-                        ${policy.egress.map((rule: string) => `
-                            <div class="network-rule egress">• ${rule}</div>
-                        `).join('')}
-                    </div>
-                ` : ''}
-            </div>
-        </div>
-    `).join('');
-}
+function renderLayer(tier: any, className: string, title: string, subtitle: string): string {
+    if (!tier) return '';
 
-function renderFinalResult(overlay: any): string {
+    let items: string[] = [];
+    
+    if (tier.resources) {
+        items.push(...tier.resources.map((r: string) => `📄 ${r}`));
+    }
+    if (tier.labels) {
+        items.push(...tier.labels.map((l: string) => `🏷️ ${l}`));
+    }
+    if (tier.config) {
+        items.push(...tier.config.map((c: string) => `⚙️ ${c}`));
+    }
+    if (tier.namePrefix) {
+        items.push(`🔤 Prefix: ${tier.namePrefix}`);
+    }
+    if (tier.namespace) {
+        items.push(`📦 Namespace: ${tier.namespace}`);
+    }
+    if (tier.replicas) {
+        items.push(`🔢 Replicas: ${tier.replicas}`);
+    }
+    if (tier.patches) {
+        items.push(...tier.patches.map((p: string) => `📝 ${p}`));
+    }
+    
     return `
-        <div class="result-box">
-            <div class="result-title">✅ Final Merged Configuration for ${overlay.name}</div>
-            <div class="item">
-                <span class="item-icon">📦</span>
-                <span>Deployment: <span class="code">${overlay.tier2.namePrefix}app</span> with ${overlay.tier3.replicas} replicas</span>
-            </div>
-            <div class="item">
-                <span class="item-icon">🌐</span>
-                <span>Namespace: <span class="code">${overlay.tier3.namespace}</span></span>
-            </div>
-            <div class="item">
-                <span class="item-icon">🔒</span>
-                <span>Network: ${overlay.tier2.networkPolicies[0]?.type || 'Default'}</span>
-            </div>
-            <div class="item">
-                <span class="item-icon">⚙️</span>
-                <span>Patches: ${overlay.tier3.patches.length} applied</span>
+        <div class="layer ${className}">
+            <div class="layer-title">${title}</div>
+            <div class="network-label">${subtitle}</div>
+            <div class="layer-items" style="margin-top: 10px;">
+                ${items.map(item => `
+                    <div class="layer-item">
+                        <span class="layer-item-bullet">•</span>
+                        <span>${item}</span>
+                    </div>
+                `).join('')}
             </div>
         </div>
     `;
