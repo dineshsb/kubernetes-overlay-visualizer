@@ -66,6 +66,7 @@ async function parseAllOverlays(projects: any[]): Promise<any[]> {
 
 async function analyzeOverlay(overlay: any, project: any): Promise<any> {
     const path = require('path');
+    const fs = require('fs');
     const overlayPath = overlay.path;
     const overlayDir = path.dirname(overlayPath);
     
@@ -75,23 +76,28 @@ async function analyzeOverlay(overlay: any, project: any): Promise<any> {
     const client = clientIdx >= 0 ? parts[clientIdx] : 'unknown';
     const env = clientIdx >= 0 && parts[clientIdx + 1] ? parts[clientIdx + 1] : 'unknown';
     
+    // Get workloads with replicas
+    const workloads = await getWorkloads(overlay, client, env);
+    
+    // Get environment variables
+    const envVars = await getEnvironmentVariables(overlay, overlayDir, client);
+    
     // Get what base/ provides
     const baseContributions = project.base ? {
         resources: project.base.resources || [],
-        labels: ['managed-by: kustomize', 'tier: application'],
-        provides: 'Core deployment template'
+        labels: ['managed-by: kustomize', 'platform: multi-tenant'],
+        provides: 'Core deployment templates and shared config'
     } : null;
     
     // Get what base/client-x provides
-    const clientBaseContributions = await getClientBaseContributions(overlayDir, project);
+    const clientBaseContributions = await getClientBaseContributions(overlayDir, project, client);
     
     // Get what overlay provides
     const overlayContributions = {
-        namespace: overlay.content?.namespace || `${client}-${env}`,
-        replicas: overlay.content?.replicas?.[0]?.count || 'default',
-        patches: overlay.patches || ['deployment-patch.yaml'],
-        configMaps: overlay.content?.configMapGenerator || [],
-        environment: env.toUpperCase()
+        namespace: 'shared-platform',
+        patches: overlay.patches || getPatches(overlayDir),
+        environment: env.toUpperCase(),
+        envConfigMap: getEnvConfigMap(overlay)
     };
     
     return {
@@ -99,17 +105,129 @@ async function analyzeOverlay(overlay: any, project: any): Promise<any> {
         client,
         environment: env,
         path: overlayPath,
+        workloads: workloads,
+        envVars: envVars,
         tier1: baseContributions,
         tier2: clientBaseContributions,
         tier3: overlayContributions
     };
 }
 
-async function getClientBaseContributions(overlayDir: string, project: any): Promise<any> {
+async function getWorkloads(overlay: any, client: string, env: string): Promise<any[]> {
+    const workloads = [];
+    const replicas = overlay.content?.replicas || [];
+    
+    // Define workloads based on client
+    if (client === 'client-a') {
+        workloads.push({
+            name: 'api',
+            fullName: `${client}-api`,
+            replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
+            type: 'Backend API'
+        });
+        workloads.push({
+            name: 'worker',
+            fullName: `${client}-worker`,
+            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
+            type: 'Job Processor'
+        });
+        workloads.push({
+            name: 'analytics',
+            fullName: `${client}-analytics`,
+            replicas: replicas.find((r: any) => r.name === 'analytics')?.count || 1,
+            type: 'Analytics Engine'
+        });
+    } else if (client === 'client-b') {
+        workloads.push({
+            name: 'api',
+            fullName: `${client}-api`,
+            replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
+            type: 'Backend API'
+        });
+        workloads.push({
+            name: 'worker',
+            fullName: `${client}-worker`,
+            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
+            type: 'Job Processor'
+        });
+        workloads.push({
+            name: 'frontend',
+            fullName: `${client}-frontend`,
+            replicas: replicas.find((r: any) => r.name === 'frontend')?.count || 2,
+            type: 'Web Frontend'
+        });
+    }
+    
+    return workloads;
+}
+
+async function getEnvironmentVariables(overlay: any, overlayDir: string, client: string): Promise<any> {
+    // Common variables (from base/configmap.yaml)
+    const commonVars = {
+        'PLATFORM_NAME': 'Multi-Tenant Platform',
+        'API_VERSION': 'v1',
+        'METRICS_ENABLED': 'true',
+        'METRICS_PORT': '9090',
+        'LOG_FORMAT': 'json',
+        'TIMEZONE': 'UTC'
+    };
+    
+    // Client-specific variables
+    const clientVars: any = {};
+    if (client === 'client-a') {
+        clientVars['CLIENT_ID'] = 'client-a';
+        clientVars['CLIENT_NAME'] = 'Client A Corporation';
+        clientVars['DATABASE_HOST'] = 'postgres.client-a.svc';
+        clientVars['DATABASE_TYPE'] = 'postgresql';
+        clientVars['CACHE_HOST'] = 'redis.client-a.svc';
+        clientVars['CACHE_ENABLED'] = 'true';
+    } else if (client === 'client-b') {
+        clientVars['CLIENT_ID'] = 'client-b';
+        clientVars['CLIENT_NAME'] = 'Client B Industries';
+        clientVars['DATABASE_HOST'] = 'mysql.client-b.svc';
+        clientVars['DATABASE_TYPE'] = 'mysql';
+        clientVars['EXTERNAL_API_ENABLED'] = 'true';
+        clientVars['S3_BUCKET'] = 'client-b-data';
+    }
+    
+    // Environment-specific variables
+    const envConfigMap = overlay.content?.configMapGenerator?.find((cm: any) => cm.name === 'env-config');
+    const envVars: any = {};
+    if (envConfigMap && envConfigMap.literals) {
+        envConfigMap.literals.forEach((literal: string) => {
+            const [key, value] = literal.split('=');
+            envVars[key] = value;
+        });
+    }
+    
+    return {
+        common: commonVars,
+        client: clientVars,
+        environment: envVars
+    };
+}
+
+function getPatches(overlayDir: string): string[] {
+    const fs = require('fs');
+    const path = require('path');
+    
+    try {
+        const files = fs.readdirSync(overlayDir);
+        return files.filter((f: string) => f.endsWith('-patch.yaml'));
+    } catch (error) {
+        return [];
+    }
+}
+
+function getEnvConfigMap(overlay: any): any {
+    const envConfigMap = overlay.content?.configMapGenerator?.find((cm: any) => cm.name === 'env-config');
+    return envConfigMap?.literals || [];
+}
+
+async function getClientBaseContributions(overlayDir: string, project: any, client: string): Promise<any> {
     const path = require('path');
     const parts = overlayDir.split(path.sep);
     const clientIdx = parts.findIndex((p: string) => p.startsWith('client-'));
-    const client = clientIdx >= 0 ? parts[clientIdx] : '';
     
     // Detect network policy files
     const networkPolicies: any[] = [];
@@ -134,9 +252,7 @@ async function getClientBaseContributions(overlayDir: string, project: any): Pro
         namePrefix: `${client}-`,
         labels: [`client: ${client}`, `team: ${client === 'client-a' ? 'platform-team' : 'data-team'}`],
         networkPolicies: networkPolicies,
-        config: client === 'client-a' ? 
-            ['DATABASE_TYPE=postgresql', 'CACHE_ENABLED=true'] :
-            ['DATABASE_TYPE=mysql', 'EXTERNAL_API_ENABLED=true', 'RATE_LIMIT=1000']
+        additionalWorkloads: client === 'client-a' ? ['analytics'] : ['frontend']
     };
 }
 
@@ -401,9 +517,8 @@ function getWebviewContent(overlays: any[]): string {
 }
 
 function renderDiagram(overlay: any, index: number): string {
-    const replicas = overlay.tier3?.replicas || 1;
-    const namespace = overlay.tier3?.namespace || 'default';
-    const deploymentName = `${overlay.tier2?.namePrefix || ''}app`;
+    const namespace = 'shared-platform';
+    const workloads = overlay.workloads || [];
     
     return `
         <div id="diagram-${index}" class="diagram-container">
@@ -412,50 +527,87 @@ function renderDiagram(overlay: any, index: number): string {
                 <span class="env-badge env-${overlay.environment}">${overlay.environment?.toUpperCase()}</span>
             </div>
 
-            <!-- Deployment Architecture -->
+            <!-- Multiple Deployments -->
             <div class="architecture">
-                <div class="deployment-box">
-                    <div class="deployment-header">
-                        🚀 Deployment: ${deploymentName}
-                    </div>
-                    <div class="pods">
-                        ${Array(Math.min(replicas, 8)).fill(0).map((_, i) => `
-                            <div class="pod">
-                                <div class="pod-icon">📦</div>
-                                <div class="pod-label">Pod ${i + 1}</div>
+                ${workloads.map((workload: any) => `
+                    <div class="deployment-box">
+                        <div class="deployment-header">
+                            🚀 ${workload.type}
+                        </div>
+                        <div style="text-align: center; font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 10px;">
+                            ${workload.fullName}
+                        </div>
+                        <div class="pods">
+                            ${Array(Math.min(workload.replicas, 6)).fill(0).map((_, i) => `
+                                <div class="pod">
+                                    <div class="pod-icon">📦</div>
+                                    <div class="pod-label">Pod ${i + 1}</div>
+                                </div>
+                            `).join('')}
+                            ${workload.replicas > 6 ? `<div class="pod" style="background: #FF9800;">+${workload.replicas - 6}</div>` : ''}
+                        </div>
+                        <div class="deployment-info">
+                            <div class="info-item">
+                                <span class="info-label">Replicas:</span>
+                                <span class="info-value">${workload.replicas}</span>
                             </div>
-                        `).join('')}
-                        ${replicas > 8 ? `<div class="pod">+${replicas - 8}</div>` : ''}
-                    </div>
-                    <div class="deployment-info">
-                        <div class="info-item">
-                            <span class="info-label">Namespace:</span>
-                            <span class="info-value">${namespace}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Replicas:</span>
-                            <span class="info-value">${replicas}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Name:</span>
-                            <span class="info-value">${deploymentName}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Environment:</span>
-                            <span class="info-value">${overlay.environment}</span>
+                            <div class="info-item">
+                                <span class="info-label">Type:</span>
+                                <span class="info-value">${workload.type}</span>
+                            </div>
                         </div>
                     </div>
-                </div>
+                `).join('')}
             </div>
+
+            <div style="text-align: center; margin: 20px 0; padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 8px;">
+                <strong>Namespace:</strong> <span style="font-family: monospace; color: var(--vscode-textLink-foreground);">${namespace}</span>
+            </div>
+
+            <!-- Environment Variables -->
+            ${renderEnvironmentVariables(overlay.envVars)}
 
             <!-- Network Flow Diagram -->
             ${renderNetworkFlow(overlay)}
 
             <!-- Inheritance Layers -->
             <div class="layers">
-                ${renderLayer(overlay.tier1, 'tier-1', '🏛️ Base', 'Common resources for all clients')}
-                ${renderLayer(overlay.tier2, 'tier-2', `🏢 ${overlay.client}`, 'Client-specific configuration')}
-                ${renderLayer(overlay.tier3, 'tier-3', `🚀 ${overlay.environment}`, 'Environment-specific overrides')}
+                ${renderLayer(overlay.tier1, 'tier-1', '🏛️ Base', 'Common resources & config')}
+                ${renderLayer(overlay.tier2, 'tier-2', `🏢 ${overlay.client}`, 'Client workloads & network')}
+                ${renderLayer(overlay.tier3, 'tier-3', `🚀 ${overlay.environment}`, 'Environment patches')}
+            </div>
+        </div>
+    `;
+}
+
+function renderEnvironmentVariables(envVars: any): string {
+    if (!envVars) return '';
+    
+    return `
+        <div class="network-diagram" style="margin-top: 20px;">
+            <div class="network-title">⚙️ Environment Variables</div>
+            <div style="display: flex; gap: 15px; margin-top: 20px;">
+                ${renderEnvVarSection('Common (All Workloads)', envVars.common, '#4CAF50')}
+                ${renderEnvVarSection('Client-Specific', envVars.client, '#2196F3')}
+                ${renderEnvVarSection('Environment-Specific', envVars.environment, '#FF9800')}
+            </div>
+        </div>
+    `;
+}
+
+function renderEnvVarSection(title: string, vars: any, color: string): string {
+    if (!vars || Object.keys(vars).length === 0) return '';
+    
+    return `
+        <div style="flex: 1; background: var(--vscode-editor-background); border: 2px solid ${color}; border-radius: 8px; padding: 15px;">
+            <div style="font-weight: bold; margin-bottom: 10px; color: ${color};">${title}</div>
+            <div style="font-size: 11px; font-family: monospace;">
+                ${Object.entries(vars).map(([key, value]) => `
+                    <div style="padding: 3px 0; display: flex; justify-content: space-between; gap: 10px;">
+                        <span style="color: var(--vscode-symbolIcon-variableForeground);">${key}</span>
+                        <span style="color: var(--vscode-descriptionForeground);">= ${value}</span>
+                    </div>
+                `).join('')}
             </div>
         </div>
     `;
@@ -525,20 +677,20 @@ function renderLayer(tier: any, className: string, title: string, subtitle: stri
     if (tier.labels) {
         items.push(...tier.labels.map((l: string) => `🏷️ ${l}`));
     }
-    if (tier.config) {
-        items.push(...tier.config.map((c: string) => `⚙️ ${c}`));
-    }
     if (tier.namePrefix) {
         items.push(`🔤 Prefix: ${tier.namePrefix}`);
+    }
+    if (tier.additionalWorkloads) {
+        items.push(`➕ Adds: ${tier.additionalWorkloads.join(', ')}`);
     }
     if (tier.namespace) {
         items.push(`📦 Namespace: ${tier.namespace}`);
     }
-    if (tier.replicas) {
-        items.push(`🔢 Replicas: ${tier.replicas}`);
-    }
     if (tier.patches) {
-        items.push(...tier.patches.map((p: string) => `📝 ${p}`));
+        items.push(`📝 Patches: ${tier.patches.length} files`);
+    }
+    if (tier.environment) {
+        items.push(`🌍 Environment: ${tier.environment}`);
     }
     
     return `
