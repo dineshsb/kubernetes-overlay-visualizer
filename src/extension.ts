@@ -139,7 +139,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
         workloads.push({
             name: 'worker',
             fullName: `${client}-worker`,
-            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
+            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 5,
             type: 'Job Processor',
             resources: { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' },
             containers: [
@@ -150,7 +150,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
         workloads.push({
             name: 'analytics',
             fullName: `${client}-analytics`,
-            replicas: replicas.find((r: any) => r.name === 'analytics')?.count || 1,
+            replicas: replicas.find((r: any) => r.name === 'analytics')?.count || 3,
             type: 'Analytics Engine',
             resources: { cpu: '2000m', memory: '4Gi', cpuRequest: '1000m', memoryRequest: '2Gi' },
             containers: [
@@ -175,7 +175,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
         workloads.push({
             name: 'worker',
             fullName: `${client}-worker`,
-            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
+            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 5,
             type: 'Job Processor',
             resources: { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' },
             containers: [
