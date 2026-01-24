@@ -355,9 +355,65 @@ function getWebviewContent(overlays: any[]): string {
                 border-radius: 12px;
                 font-size: 12px;
                 font-weight: bold;
+                animation: badgePulse 2s ease-in-out infinite;
             }
             .env-dev { background: #FF9800; color: white; }
             .env-prod { background: #4CAF50; color: white; }
+            
+            /* Animations */
+            @keyframes fadeInUp {
+                from {
+                    opacity: 0;
+                    transform: translateY(20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            
+            @keyframes pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+            }
+            
+            @keyframes badgePulse {
+                0%, 100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4); }
+                50% { box-shadow: 0 0 0 8px rgba(76, 175, 80, 0); }
+            }
+            
+            @keyframes flowRight {
+                0% { transform: translateX(-10px); opacity: 0.5; }
+                50% { opacity: 1; }
+                100% { transform: translateX(10px); opacity: 0.5; }
+            }
+            
+            @keyframes slideInLeft {
+                from {
+                    opacity: 0;
+                    transform: translateX(-30px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            
+            @keyframes slideInRight {
+                from {
+                    opacity: 0;
+                    transform: translateX(30px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            
+            @keyframes glow {
+                0%, 100% { box-shadow: 0 0 5px rgba(33, 150, 243, 0.5); }
+                50% { box-shadow: 0 0 20px rgba(33, 150, 243, 0.8), 0 0 30px rgba(33, 150, 243, 0.6); }
+            }
             
             /* Architecture Diagram */
             .architecture {
@@ -365,6 +421,7 @@ function getWebviewContent(overlays: any[]): string {
                 gap: 40px;
                 margin: 30px 0;
                 justify-content: center;
+                animation: fadeInUp 0.8s ease-out;
             }
             .deployment-box {
                 background: var(--vscode-editorWidget-background);
@@ -372,6 +429,19 @@ function getWebviewContent(overlays: any[]): string {
                 border-radius: 12px;
                 padding: 20px;
                 min-width: 400px;
+                transition: all 0.3s ease;
+                animation: slideInLeft 0.6s ease-out;
+            }
+            .deployment-box:nth-child(2) {
+                animation: fadeInUp 0.8s ease-out 0.2s backwards;
+            }
+            .deployment-box:nth-child(3) {
+                animation: slideInRight 0.6s ease-out 0.3s backwards;
+            }
+            .deployment-box:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 8px 16px rgba(33, 150, 243, 0.3);
+                border-color: #64B5F6;
             }
             .deployment-header {
                 font-size: 16px;
@@ -399,6 +469,19 @@ function getWebviewContent(overlays: any[]): string {
                 color: white;
                 font-weight: bold;
                 box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+                animation: pulse 3s ease-in-out infinite;
+                transition: all 0.3s ease;
+            }
+            .pod:nth-child(1) { animation-delay: 0s; }
+            .pod:nth-child(2) { animation-delay: 0.2s; }
+            .pod:nth-child(3) { animation-delay: 0.4s; }
+            .pod:nth-child(4) { animation-delay: 0.6s; }
+            .pod:nth-child(5) { animation-delay: 0.8s; }
+            .pod:nth-child(6) { animation-delay: 1s; }
+            .pod:hover {
+                transform: scale(1.1) rotate(5deg);
+                box-shadow: 0 6px 12px rgba(76, 175, 80, 0.5);
+                cursor: pointer;
             }
             .pod-icon {
                 font-size: 32px;
@@ -433,6 +516,7 @@ function getWebviewContent(overlays: any[]): string {
                 padding: 15px;
                 background: var(--vscode-editorWidget-background);
                 border-radius: 8px;
+                animation: fadeInUp 1s ease-out 0.4s backwards;
             }
             .network-title {
                 font-size: 16px;
@@ -455,21 +539,36 @@ function getWebviewContent(overlays: any[]): string {
                 border: 2px solid var(--vscode-panel-border);
                 border-radius: 6px;
                 text-align: center;
+                transition: all 0.3s ease;
+            }
+            .network-node:hover {
+                transform: scale(1.05);
+                border-width: 3px;
             }
             .network-node.ingress {
                 border-color: #4CAF50;
+                animation: slideInLeft 0.6s ease-out 0.5s backwards;
+            }
+            .network-node.ingress:hover {
+                box-shadow: 0 0 15px rgba(76, 175, 80, 0.5);
             }
             .network-node.pod {
                 border-color: #2196F3;
                 background: #2196F3;
                 color: white;
+                animation: pulse 2s ease-in-out infinite;
             }
             .network-node.egress {
                 border-color: #FF9800;
+                animation: slideInRight 0.6s ease-out 0.5s backwards;
+            }
+            .network-node.egress:hover {
+                box-shadow: 0 0 15px rgba(255, 152, 0, 0.5);
             }
             .network-arrow {
                 font-size: 28px;
                 color: var(--vscode-textLink-foreground);
+                animation: flowRight 2s ease-in-out infinite;
             }
             .arrow-green { color: #4CAF50; }
             .arrow-orange { color: #FF9800; }
@@ -492,6 +591,7 @@ function getWebviewContent(overlays: any[]): string {
                 padding: 15px;
                 background: var(--vscode-editorWidget-background);
                 border-radius: 8px;
+                animation: fadeInUp 1s ease-out 0.6s backwards;
             }
             .env-section-title {
                 font-size: 16px;
@@ -499,6 +599,31 @@ function getWebviewContent(overlays: any[]): string {
                 margin-bottom: 12px;
                 text-align: center;
                 color: #2196F3;
+            }
+            
+            /* Container animations */
+            .diagram-container {
+                display: none;
+            }
+            .diagram-container.active {
+                display: block;
+                animation: fadeInUp 0.5s ease-out;
+            }
+            
+            /* Hover effects for command blocks */
+            code {
+                transition: all 0.2s ease;
+                display: inline-block;
+                cursor: pointer;
+            }
+            code:hover {
+                transform: translateX(5px);
+                color: var(--vscode-textLink-activeForeground) !important;
+            }
+            
+            /* Tooltip styling (native title attribute) */
+            [title] {
+                position: relative;
             }
         </style>
     </head>
@@ -526,9 +651,34 @@ function getWebviewContent(overlays: any[]): string {
                     const diagram = document.getElementById('diagram-' + index);
                     if (diagram) {
                         diagram.classList.add('active');
+                        // Trigger animations on container elements
+                        animateContainers(diagram);
                     }
                 }
             }
+            
+            function animateContainers(diagram) {
+                // Stagger container animations
+                const containers = diagram.querySelectorAll('[data-container]');
+                containers.forEach((container, idx) => {
+                    container.style.animation = 'none';
+                    setTimeout(() => {
+                        container.style.animation = \`slideInLeft 0.4s ease-out \${idx * 0.1}s backwards\`;
+                    }, 10);
+                });
+            }
+            
+            // Add tooltips to pods
+            document.addEventListener('DOMContentLoaded', () => {
+                document.querySelectorAll('.pod').forEach(pod => {
+                    pod.addEventListener('mouseenter', function() {
+                        this.style.animationPlayState = 'paused';
+                    });
+                    pod.addEventListener('mouseleave', function() {
+                        this.style.animationPlayState = 'running';
+                    });
+                });
+            });
         </script>
     </body>
     </html>`;
@@ -560,9 +710,12 @@ function renderDiagram(overlay: any, index: number): string {
                         
                         <div style="margin: 8px 0; padding: 8px; background: var(--vscode-editor-background); border-radius: 4px;">
                             <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: var(--vscode-descriptionForeground);">Containers:</div>
-                            ${workload.containers.map((container: any) => `
-                                <div style="display: flex; align-items: center; gap: 6px; padding: 3px 6px; margin: 2px 0; background: var(--vscode-editorWidget-background); border-radius: 3px; border-left: 2px solid ${container.type === 'main' ? '#4CAF50' : '#FF9800'};">
-                                    <span style="font-size: 14px;">${container.icon}</span>
+                            ${workload.containers.map((container: any, idx: number) => `
+                                <div data-container style="display: flex; align-items: center; gap: 6px; padding: 3px 6px; margin: 2px 0; background: var(--vscode-editorWidget-background); border-radius: 3px; border-left: 2px solid ${container.type === 'main' ? '#4CAF50' : '#FF9800'}; transition: all 0.3s ease; cursor: pointer;" 
+                                     onmouseover="this.style.transform='translateX(5px)'; this.style.borderLeftWidth='4px';" 
+                                     onmouseout="this.style.transform='translateX(0)'; this.style.borderLeftWidth='2px';"
+                                     title="${container.type === 'main' ? 'Main Application Container' : 'Sidecar: ' + container.purpose}">
+                                    <span style="font-size: 14px; ${container.type === 'sidecar' ? 'animation: pulse 2s ease-in-out infinite;' : ''}">${container.icon}</span>
                                     <span style="font-size: 10px; font-family: monospace; flex: 1;">${container.name}</span>
                                     ${container.purpose ? `<span style="font-size: 9px; color: var(--vscode-descriptionForeground);">${container.purpose}</span>` : ''}
                                 </div>
