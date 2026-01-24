@@ -123,38 +123,66 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             name: 'api',
             fullName: `${client}-api`,
             replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
-            type: 'Backend API'
+            type: 'Backend API',
+            containers: [
+                { name: 'api', type: 'main', icon: '🚀' },
+                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
+                { name: 'prometheus-exporter', type: 'sidecar', icon: '📊', purpose: 'Metrics' }
+            ]
         });
         workloads.push({
             name: 'worker',
             fullName: `${client}-worker`,
             replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
-            type: 'Job Processor'
+            type: 'Job Processor',
+            containers: [
+                { name: 'worker', type: 'main', icon: '⚙️' },
+                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' }
+            ]
         });
         workloads.push({
             name: 'analytics',
             fullName: `${client}-analytics`,
             replicas: replicas.find((r: any) => r.name === 'analytics')?.count || 1,
-            type: 'Analytics Engine'
+            type: 'Analytics Engine',
+            containers: [
+                { name: 'analytics', type: 'main', icon: '📈' },
+                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
+                { name: 'envoy-proxy', type: 'sidecar', icon: '🔀', purpose: 'Service Mesh' }
+            ]
         });
     } else if (client === 'client-b') {
         workloads.push({
             name: 'api',
             fullName: `${client}-api`,
             replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
-            type: 'Backend API'
+            type: 'Backend API',
+            containers: [
+                { name: 'api', type: 'main', icon: '🚀' },
+                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
+                { name: 'prometheus-exporter', type: 'sidecar', icon: '📊', purpose: 'Metrics' }
+            ]
         });
         workloads.push({
             name: 'worker',
             fullName: `${client}-worker`,
             replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
-            type: 'Job Processor'
+            type: 'Job Processor',
+            containers: [
+                { name: 'worker', type: 'main', icon: '⚙️' },
+                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' }
+            ]
         });
         workloads.push({
             name: 'frontend',
             fullName: `${client}-frontend`,
             replicas: replicas.find((r: any) => r.name === 'frontend')?.count || 2,
-            type: 'Web Frontend'
+            type: 'Web Frontend',
+            containers: [
+                { name: 'frontend', type: 'main', icon: '🌐' },
+                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
+                { name: 'envoy-proxy', type: 'sidecar', icon: '🔀', purpose: 'Service Mesh' }
+            ]
         });
     }
     
@@ -546,11 +574,24 @@ function renderDiagram(overlay: any, index: number): string {
                         <div style="text-align: center; font-size: 13px; font-weight: bold; color: var(--vscode-textLink-foreground); margin: 10px 0; font-family: monospace;">
                             Deployment: ${workload.fullName}
                         </div>
+                        
+                        <!-- Containers in Pod -->
+                        <div style="margin: 10px 0; padding: 10px; background: var(--vscode-editor-background); border-radius: 5px;">
+                            <div style="font-size: 11px; font-weight: bold; margin-bottom: 8px; color: var(--vscode-descriptionForeground);">Containers per Pod:</div>
+                            ${workload.containers.map((container: any) => `
+                                <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; margin: 4px 0; background: var(--vscode-editorWidget-background); border-radius: 4px; border-left: 3px solid ${container.type === 'main' ? '#4CAF50' : '#FF9800'};">
+                                    <span style="font-size: 16px;">${container.icon}</span>
+                                    <span style="font-size: 11px; font-family: monospace; flex: 1;">${container.name}</span>
+                                    ${container.purpose ? `<span style="font-size: 10px; color: var(--vscode-descriptionForeground);">${container.purpose}</span>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                        
                         <div class="pods">
                             ${Array(Math.min(workload.replicas, 6)).fill(0).map((_, i) => `
                                 <div class="pod">
                                     <div class="pod-icon">📦</div>
-                                    <div class="pod-label">Pod ${i + 1}</div>
+                                    <div class="pod-label">${workload.containers.length}c</div>
                                 </div>
                             `).join('')}
                             ${workload.replicas > 6 ? `<div class="pod" style="background: #FF9800;">+${workload.replicas - 6}</div>` : ''}
@@ -561,8 +602,8 @@ function renderDiagram(overlay: any, index: number): string {
                                 <span class="info-value">${workload.replicas}</span>
                             </div>
                             <div class="info-item">
-                                <span class="info-label">Type:</span>
-                                <span class="info-value">${workload.type}</span>
+                                <span class="info-label">Containers/Pod:</span>
+                                <span class="info-value">${workload.containers.length}</span>
                             </div>
                         </div>
                     </div>
