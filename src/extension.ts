@@ -117,6 +117,11 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
     const workloads = [];
     const replicas = overlay.content?.replicas || [];
     
+    // Define resource limits based on environment
+    const resourcesByEnv = env === 'prod' 
+        ? { cpu: '1000m', memory: '2Gi', cpuRequest: '500m', memoryRequest: '1Gi' }
+        : { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' };
+    
     // Define workloads based on client
     if (client === 'client-a') {
         workloads.push({
@@ -124,6 +129,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             fullName: `${client}-api`,
             replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
             type: 'Backend API',
+            resources: resourcesByEnv,
             containers: [
                 { name: 'api', type: 'main', icon: '🚀' },
                 { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
@@ -135,6 +141,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             fullName: `${client}-worker`,
             replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
             type: 'Job Processor',
+            resources: { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' },
             containers: [
                 { name: 'worker', type: 'main', icon: '⚙️' },
                 { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' }
@@ -145,6 +152,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             fullName: `${client}-analytics`,
             replicas: replicas.find((r: any) => r.name === 'analytics')?.count || 1,
             type: 'Analytics Engine',
+            resources: { cpu: '2000m', memory: '4Gi', cpuRequest: '1000m', memoryRequest: '2Gi' },
             containers: [
                 { name: 'analytics', type: 'main', icon: '📈' },
                 { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
@@ -157,6 +165,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             fullName: `${client}-api`,
             replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
             type: 'Backend API',
+            resources: resourcesByEnv,
             containers: [
                 { name: 'api', type: 'main', icon: '🚀' },
                 { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
@@ -168,6 +177,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             fullName: `${client}-worker`,
             replicas: replicas.find((r: any) => r.name === 'worker')?.count || 1,
             type: 'Job Processor',
+            resources: { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' },
             containers: [
                 { name: 'worker', type: 'main', icon: '⚙️' },
                 { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' }
@@ -178,6 +188,7 @@ async function getWorkloads(overlay: any, client: string, env: string): Promise<
             fullName: `${client}-frontend`,
             replicas: replicas.find((r: any) => r.name === 'frontend')?.count || 2,
             type: 'Web Frontend',
+            resources: { cpu: '300m', memory: '512Mi', cpuRequest: '150m', memoryRequest: '256Mi' },
             containers: [
                 { name: 'frontend', type: 'main', icon: '🌐' },
                 { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
@@ -705,7 +716,7 @@ function renderDiagram(overlay: any, index: number): string {
                     <div class="deployment-box">
                         <div class="deployment-header">🚀 ${workload.type}</div>
                         <div style="text-align: center; font-size: 12px; font-weight: bold; color: var(--vscode-textLink-foreground); margin: 8px 0; font-family: monospace;">
-                            ${workload.fullName}
+                            Deployment: ${workload.fullName}
                         </div>
                         
                         <div style="margin: 8px 0; padding: 8px; background: var(--vscode-editor-background); border-radius: 4px;">
@@ -739,6 +750,29 @@ function renderDiagram(overlay: any, index: number): string {
                             <div class="info-item">
                                 <span class="info-label">Containers:</span>
                                 <span class="info-value">${workload.containers.length}</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Resource Limits -->
+                        <div style="margin-top: 10px; padding: 8px; background: var(--vscode-editor-background); border-radius: 6px; border-left: 3px solid #9C27B0;">
+                            <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: #9C27B0;">💻 Resources</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 10px;">
+                                <div>
+                                    <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">CPU Limit:</div>
+                                    <div style="font-family: monospace; color: var(--vscode-textLink-foreground); font-weight: bold;">${workload.resources.cpu}</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">Memory Limit:</div>
+                                    <div style="font-family: monospace; color: var(--vscode-textLink-foreground); font-weight: bold;">${workload.resources.memory}</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">CPU Request:</div>
+                                    <div style="font-family: monospace; color: var(--vscode-descriptionForeground);">${workload.resources.cpuRequest}</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">Memory Request:</div>
+                                    <div style="font-family: monospace; color: var(--vscode-descriptionForeground);">${workload.resources.memoryRequest}</div>
+                                </div>
                             </div>
                         </div>
                     </div>
