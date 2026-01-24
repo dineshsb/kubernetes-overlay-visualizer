@@ -236,14 +236,23 @@ async function getClientBaseContributions(overlayDir: string, project: any, clie
             file: 'db-network.yml',
             type: 'Database & Cache Access',
             ingress: [],
-            egress: ['PostgreSQL (5432)', 'Redis (6379)', 'DNS (53)']
+            egress: [
+                'PostgreSQL (5432) → 10.100.1.0/24',
+                'Redis (6379) → 10.100.2.0/24',
+                'DNS (53) → 10.96.0.10/32'
+            ]
         });
     } else if (client === 'client-b') {
         networkPolicies.push({
             file: 'api-network.yml',
             type: 'API & Database Access',
-            ingress: ['API Gateway → 8080'],
-            egress: ['MySQL (3306)', 'External APIs (443)', 'S3 (443)', 'DNS (53)']
+            ingress: ['API Gateway (8080) ← 10.200.1.0/24'],
+            egress: [
+                'MySQL (3306) → 10.100.3.0/24',
+                'External APIs (443) → 192.168.50.0/24',
+                'S3 (443) → 52.92.0.0/16',
+                'DNS (53) → 10.96.0.10/32'
+            ]
         });
     }
     
@@ -534,8 +543,8 @@ function renderDiagram(overlay: any, index: number): string {
                         <div class="deployment-header">
                             🚀 ${workload.type}
                         </div>
-                        <div style="text-align: center; font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 10px;">
-                            ${workload.fullName}
+                        <div style="text-align: center; font-size: 13px; font-weight: bold; color: var(--vscode-textLink-foreground); margin: 10px 0; font-family: monospace;">
+                            Deployment: ${workload.fullName}
                         </div>
                         <div class="pods">
                             ${Array(Math.min(workload.replicas, 6)).fill(0).map((_, i) => `
@@ -564,6 +573,9 @@ function renderDiagram(overlay: any, index: number): string {
                 <strong>Namespace:</strong> <span style="font-family: monospace; color: var(--vscode-textLink-foreground);">${namespace}</span>
             </div>
 
+            <!-- Kubectl Commands -->
+            ${renderKubectlCommands(overlay, namespace)}
+
             <!-- Environment Variables -->
             ${renderEnvironmentVariables(overlay.envVars)}
 
@@ -575,6 +587,57 @@ function renderDiagram(overlay: any, index: number): string {
                 ${renderLayer(overlay.tier1, 'tier-1', '🏛️ Base', 'Common resources & config')}
                 ${renderLayer(overlay.tier2, 'tier-2', `🏢 ${overlay.client}`, 'Client workloads & network')}
                 ${renderLayer(overlay.tier3, 'tier-3', `🚀 ${overlay.environment}`, 'Environment patches')}
+            </div>
+        </div>
+    `;
+}
+
+function renderKubectlCommands(overlay: any, namespace: string): string {
+    const workloads = overlay.workloads || [];
+    const client = overlay.client;
+    
+    return `
+        <div class="network-diagram" style="margin: 20px 0;">
+            <div class="network-title">⌨️ Kubectl Commands</div>
+            <div style="background: var(--vscode-editor-background); padding: 15px; border-radius: 8px; margin-top: 15px;">
+                <div style="display: grid; gap: 10px;">
+                    <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">View all deployments in namespace:</div>
+                        <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl get deployments -n ${namespace}</code>
+                    </div>
+                    
+                    <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">View all pods for ${client}:</div>
+                        <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl get pods -n ${namespace} -l client=${client}</code>
+                    </div>
+                    
+                    ${workloads.map((workload: any) => `
+                        <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                            <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">Describe ${workload.type}:</div>
+                            <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl describe deployment ${workload.fullName} -n ${namespace}</code>
+                        </div>
+                        
+                        <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                            <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">Scale ${workload.type}:</div>
+                            <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl scale deployment ${workload.fullName} --replicas=3 -n ${namespace}</code>
+                        </div>
+                        
+                        <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                            <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">View logs for ${workload.type}:</div>
+                            <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl logs -n ${namespace} -l app=${workload.name} --tail=100</code>
+                        </div>
+                    `).join('')}
+                    
+                    <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">View network policies:</div>
+                        <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl get networkpolicies -n ${namespace} -l client=${client}</code>
+                    </div>
+                    
+                    <div style="padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 5px;">
+                        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 5px;">View ConfigMaps:</div>
+                        <code style="font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground);">kubectl get configmaps -n ${namespace} -l client=${client}</code>
+                    </div>
+                </div>
             </div>
         </div>
     `;

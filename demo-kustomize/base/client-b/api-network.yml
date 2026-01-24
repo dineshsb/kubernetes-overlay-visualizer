@@ -7,14 +7,16 @@ spec:
     matchLabels:
       client: client-b
   policyTypes:
-  - Egress
   - Ingress
+  - Egress
   ingress:
   # Allow API gateway to reach this service
   - from:
     - namespaceSelector:
         matchLabels:
           name: api-gateway
+    - ipBlock:
+        cidr: 10.200.1.0/24
     ports:
     - protocol: TCP
       port: 8080
@@ -27,6 +29,8 @@ spec:
     - podSelector:
         matchLabels:
           app: mysql
+    - ipBlock:
+        cidr: 10.100.3.0/24
     ports:
     - protocol: TCP
       port: 3306
@@ -35,12 +39,15 @@ spec:
     - namespaceSelector:
         matchLabels:
           name: external-services
+    - ipBlock:
+        cidr: 192.168.50.0/24
     ports:
     - protocol: TCP
       port: 443
   # Allow S3 access for Client B
   - to:
-    - namespaceSelector: {}
+    - ipBlock:
+        cidr: 52.92.0.0/16  # AWS S3 IP range
     ports:
     - protocol: TCP
       port: 443
@@ -49,6 +56,8 @@ spec:
     - namespaceSelector:
         matchLabels:
           name: kube-system
+    - ipBlock:
+        cidr: 10.96.0.10/32
     ports:
     - protocol: UDP
       port: 53

@@ -17,6 +17,8 @@ spec:
     - podSelector:
         matchLabels:
           app: postgresql
+    - ipBlock:
+        cidr: 10.100.1.0/24
     ports:
     - protocol: TCP
       port: 5432
@@ -25,6 +27,8 @@ spec:
     - podSelector:
         matchLabels:
           app: redis
+    - ipBlock:
+        cidr: 10.100.2.0/24
     ports:
     - protocol: TCP
       port: 6379
@@ -33,6 +37,8 @@ spec:
     - namespaceSelector:
         matchLabels:
           name: kube-system
+    - ipBlock:
+        cidr: 10.96.0.10/32
     ports:
     - protocol: UDP
       port: 53
