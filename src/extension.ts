@@ -79,6 +79,22 @@ async function showVisualization(parser: KustomizeParser, context: vscode.Extens
                         await vscode.env.clipboard.writeText(message.text);
                         vscode.window.showInformationMessage('Command copied to clipboard!');
                         break;
+                    case 'exportImage':
+                        // Handle image export
+                        const buffer = Buffer.from(message.imageData.split(',')[1], 'base64');
+                        const options: vscode.SaveDialogOptions = {
+                            defaultUri: vscode.Uri.file(`kustomize-${message.overlayName}-${Date.now()}.${message.format}`),
+                            filters: {
+                                'Images': message.format === 'png' ? ['png'] : ['jpg', 'jpeg']
+                            }
+                        };
+                        const fileUri = await vscode.window.showSaveDialog(options);
+                        if (fileUri) {
+                            const fs = require('fs').promises;
+                            await fs.writeFile(fileUri.fsPath, buffer);
+                            vscode.window.showInformationMessage(`Diagram exported to ${fileUri.fsPath}`);
+                        }
+                        break;
                 }
             },
             undefined,
@@ -162,6 +178,29 @@ async function analyzeOverlay(parser: KustomizeParser, overlay: any, project: an
 
     // Validate configuration
     const validationIssues = await parser.validateOverlay(overlay.path);
+    console.log(`[Validation] Found ${validationIssues.length} issues for ${overlay.path}`);
+    
+    // Map validation issues to workloads
+    const issuesByDeployment = new Map<string, any[]>();
+    for (const issue of validationIssues) {
+        console.log(`[Validation] Issue: ${issue.severity} - ${issue.resource} - ${issue.message}`);
+        // Extract deployment name from resource string (e.g., "Deployment: api / Container: main")
+        const match = issue.resource.match(/Deployment:\s*([^\s\/]+)/);
+        if (match) {
+            const deploymentName = match[1];
+            if (!issuesByDeployment.has(deploymentName)) {
+                issuesByDeployment.set(deploymentName, []);
+            }
+            issuesByDeployment.get(deploymentName)!.push(issue);
+            console.log(`[Validation] Mapped to deployment: ${deploymentName}`);
+        }
+    }
+
+    // Add validation issues to each workload
+    workloads.forEach(workload => {
+        workload.validationIssues = issuesByDeployment.get(workload.name) || [];
+        console.log(`[Validation] Workload ${workload.name} has ${workload.validationIssues.length} issues`);
+    });
 
     // Organize ConfigMaps by scope
     const envVars = organizeConfigMaps(configMaps, overlay);
@@ -322,6 +361,8 @@ function getWebviewContent(overlays: any[]): string {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Kustomize Visualization</title>
+        <!-- html2canvas for export functionality -->
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
@@ -451,7 +492,7 @@ function getWebviewContent(overlays: any[]): string {
                 animation: slideInLeft 0.6s ease-out;
             }
             .deployment-box::after {
-                content: '👁️ Click to view YAML';
+                content: '👁️ Click to view';
                 position: absolute;
                 top: 10px;
                 right: 15px;
@@ -460,8 +501,9 @@ function getWebviewContent(overlays: any[]): string {
                 background: var(--vscode-editor-background);
                 padding: 4px 8px;
                 border-radius: 4px;
-                opacity: 0.7;
+                opacity: 0;
                 pointer-events: none;
+                transition: opacity 0.2s;
             }
             .deployment-box:hover {
                 transform: translateY(-5px);
@@ -469,7 +511,7 @@ function getWebviewContent(overlays: any[]): string {
                 border-color: #64B5F6;
             }
             .deployment-box:hover::after {
-                opacity: 1;
+                opacity: 0.8;
             }
             .deployment-box:nth-child(2) {
                 animation: fadeInUp 0.8s ease-out 0.2s backwards;
@@ -643,6 +685,7 @@ function getWebviewContent(overlays: any[]): string {
             /* Container animations */
             .diagram-container {
                 display: none;
+                min-height: 100vh;
             }
             .diagram-container.active {
                 display: block;
@@ -704,6 +747,18 @@ function getWebviewContent(overlays: any[]): string {
                     <option value="${idx}">${opt.label}</option>
                 `).join('')}
             </select>
+            
+            <!-- Export Buttons -->
+            <div style="display: inline-block; margin-left: 20px;">
+                <button onclick="exportDiagram('png')" 
+                        style="background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 8px;">
+                    📸 Export PNG
+                </button>
+                <button onclick="exportDiagram('jpg')" 
+                        style="background: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                    📸 Export JPG
+                </button>
+            </div>
         </div>
 
         ${overlays.map((overlay, idx) => renderDiagram(overlay, idx)).join('')}
@@ -747,12 +802,53 @@ function getWebviewContent(overlays: any[]): string {
                 if (!tooltip || !backdrop || !element.dataset.workload) return;
                 
                 const workload = JSON.parse(element.dataset.workload);
+                const issues = workload.validationIssues || [];
+                const errors = issues.filter(i => i.severity === 'error');
+                const warnings = issues.filter(i => i.severity === 'warning');
                 
                 // Escape HTML in YAML content
                 const yamlHtml = (workload.yamlContent || '# No content available')
                     .replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;');
+                
+                // Render validation issues
+                let issuesHtml = '';
+                if (issues.length > 0) {
+                    issuesHtml = \`
+                        <div style="margin-bottom: 16px; padding: 12px; background: var(--vscode-inputValidation-errorBackground); border-left: 4px solid #f44336; border-radius: 4px;">
+                            <div style="font-size: 14px; font-weight: bold; margin-bottom: 12px; color: #f44336;">⚠️ VALIDATION ISSUES</div>
+                            \${errors.map(issue => \`
+                                <div style="margin-bottom: 12px; padding: 10px; background: rgba(244, 67, 54, 0.1); border-radius: 4px; border-left: 3px solid #f44336;">
+                                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                                        <div style="flex: 1;">
+                                            <div style="font-size: 12px; font-weight: bold; color: #f44336; margin-bottom: 4px;">❌ ERROR: \${issue.resource}</div>
+                                            <div style="font-size: 11px; color: var(--vscode-foreground); line-height: 1.5;">\${issue.message}</div>
+                                        </div>
+                                        <button onclick="event.stopPropagation(); editDeployment('\${issue.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}');"
+                                                style="background: #f44336; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap; margin-left: 10px;">
+                                            🔧 Fix
+                                        </button>
+                                    </div>
+                                </div>
+                            \`).join('')}
+                            \${warnings.map(issue => \`
+                                <div style="margin-bottom: 12px; padding: 10px; background: rgba(255, 152, 0, 0.1); border-radius: 4px; border-left: 3px solid #FF9800;">
+                                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                                        <div style="flex: 1;">
+                                            <div style="font-size: 12px; font-weight: bold; color: #FF9800; margin-bottom: 4px;">⚠️ WARNING: \${issue.resource}</div>
+                                            <div style="font-size: 11px; color: var(--vscode-foreground); line-height: 1.5;">\${issue.message}</div>
+                                        </div>
+                                        <button onclick="event.stopPropagation(); editDeployment('\${issue.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}');"
+                                                style="background: #FF9800; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap; margin-left: 10px;">
+                                            🔧 Fix
+                                        </button>
+                                    </div>
+                                </div>
+                            \`).join('')}
+                        </div>
+                    \`;
+                }
                 
                 tooltip.innerHTML = \`
                     <div style="display: flex; flex-direction: column; height: 100%; max-height: 80vh;">
@@ -775,6 +871,8 @@ function getWebviewContent(overlays: any[]): string {
                             </div>
                         </div>
                         <div style="flex: 1; overflow-y: auto; padding: 16px;">
+                            \${issuesHtml}
+                            <div style="font-size: 14px; font-weight: bold; margin-bottom: 8px; color: var(--vscode-textLink-foreground);">📄 YAML CONTENT</div>
                             <div style="background: var(--vscode-textCodeBlock-background); padding: 12px; border-radius: 4px; font-family: 'Courier New', Consolas, monospace; font-size: 12px; white-space: pre-wrap; line-height: 1.6; overflow-x: auto;">
                                 <code style="color: var(--vscode-editor-foreground);">\${yamlHtml}</code>
                             </div>
@@ -813,6 +911,198 @@ function getWebviewContent(overlays: any[]): string {
                 });
             }
 
+            // Show all validation issues in a modal
+            function showAllValidationIssues(overlayIndex) {
+                const overlay = overlaysData[overlayIndex];
+                const allIssues = overlay.validationIssues || [];
+                const errors = allIssues.filter(i => i.severity === 'error');
+                const warnings = allIssues.filter(i => i.severity === 'warning');
+                
+                const tooltip = document.getElementById('hover-tooltip');
+                const backdrop = document.getElementById('tooltip-backdrop');
+                if (!tooltip || !backdrop) return;
+                
+                tooltip.innerHTML = \`
+                    <div style="display: flex; flex-direction: column; height: 100%; max-height: 80vh;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px; background: var(--vscode-editor-background); border-bottom: 2px solid var(--vscode-panel-border); border-radius: 8px 8px 0 0;">
+                            <div>
+                                <strong style="font-size: 16px; color: var(--vscode-textLink-foreground);">Validation Report</strong>
+                                <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px;">
+                                    \${overlay.name} - \${errors.length} errors, \${warnings.length} warnings
+                                </div>
+                            </div>
+                            <button onclick="hideTooltip();" 
+                                    style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                ✕ Close
+                            </button>
+                        </div>
+                        <div style="flex: 1; overflow-y: auto; padding: 16px;">
+                            \${errors.length > 0 ? \`
+                                <div style="margin-bottom: 20px;">
+                                    <div style="font-size: 14px; font-weight: bold; margin-bottom: 12px; color: #f44336;">❌ ERRORS (\${errors.length})</div>
+                                    \${errors.map(issue => \`
+                                        <div style="margin-bottom: 12px; padding: 12px; background: rgba(244, 67, 54, 0.1); border-radius: 4px; border-left: 4px solid #f44336;">
+                                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                                                <div style="font-size: 12px; font-weight: bold; color: #f44336;">\${issue.resource}</div>
+                                                <button onclick="event.stopPropagation(); editDeployment('\${issue.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}');"
+                                                        style="background: #f44336; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap;">
+                                                    🔧 Fix
+                                                </button>
+                                            </div>
+                                            <div style="font-size: 11px; color: var(--vscode-foreground); line-height: 1.5;">\${issue.message}</div>
+                                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 4px;">📄 \${issue.filePath.split(/[\\\\\/]/).pop()}</div>
+                                        </div>
+                                    \`).join('')}
+                                </div>
+                            \` : ''}
+                            \${warnings.length > 0 ? \`
+                                <div style="margin-bottom: 20px;">
+                                    <div style="font-size: 14px; font-weight: bold; margin-bottom: 12px; color: #FF9800;">⚠️ WARNINGS (\${warnings.length})</div>
+                                    \${warnings.map(issue => \`
+                                        <div style="margin-bottom: 12px; padding: 12px; background: rgba(255, 152, 0, 0.1); border-radius: 4px; border-left: 4px solid #FF9800;">
+                                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                                                <div style="font-size: 12px; font-weight: bold; color: #FF9800;">\${issue.resource}</div>
+                                                <button onclick="event.stopPropagation(); editDeployment('\${issue.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}');"
+                                                        style="background: #FF9800; color: white; border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap;">
+                                                    🔧 Fix
+                                                </button>
+                                            </div>
+                                            <div style="font-size: 11px; color: var(--vscode-foreground); line-height: 1.5;">\${issue.message}</div>
+                                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 4px;">📄 \${issue.filePath.split(/[\\\\\/]/).pop()}</div>
+                                        </div>
+                                    \`).join('')}
+                                </div>
+                            \` : ''}
+                            \${errors.length === 0 && warnings.length === 0 ? \`
+                                <div style="text-align: center; padding: 40px; color: var(--vscode-descriptionForeground);">
+                                    <div style="font-size: 48px; margin-bottom: 16px;">🟢</div>
+                                    <div style="font-size: 16px; font-weight: bold; color: #4CAF50;">All Checks Passed!</div>
+                                    <div style="font-size: 12px; margin-top: 8px;">No validation issues found in this overlay.</div>
+                                </div>
+                            \` : ''}
+                        </div>
+                    </div>
+                \`;
+                
+                backdrop.style.display = 'block';
+                tooltip.style.display = 'block';
+                tooltip.onclick = (e) => e.stopPropagation();
+            }
+
+            // Export diagram to PNG/JPG
+            async function exportDiagram(format) {
+                const select = document.getElementById('overlay-select');
+                const selectedIndex = select.value;
+                
+                if (!selectedIndex) {
+                    alert('Please select an overlay first!');
+                    return;
+                }
+                
+                const diagramContainer = document.getElementById('diagram-' + selectedIndex);
+                if (!diagramContainer || !diagramContainer.classList.contains('active')) {
+                    alert('Please make sure the diagram is visible!');
+                    return;
+                }
+                
+                // Show loading message
+                const button = event.target;
+                const originalText = button.textContent;
+                button.textContent = '⏳ Exporting...';
+                button.disabled = true;
+                
+                try {
+                    // Hide tooltips and modals before export
+                    const tooltip = document.getElementById('hover-tooltip');
+                    const backdrop = document.getElementById('tooltip-backdrop');
+                    if (tooltip) tooltip.style.display = 'none';
+                    if (backdrop) backdrop.style.display = 'none';
+                    
+                    // Temporarily change architecture layout for export (flexbox issues with html2canvas)
+                    const architecture = diagramContainer.querySelector('.architecture');
+                    const originalDisplay = architecture ? architecture.style.display : '';
+                    const originalFlexDirection = architecture ? architecture.style.flexDirection : '';
+                    
+                    if (architecture) {
+                        architecture.style.display = 'block';
+                        architecture.style.flexDirection = '';
+                        
+                        // Make deployment boxes stack vertically for export
+                        const deploymentBoxes = architecture.querySelectorAll('.deployment-box');
+                        const originalStyles = [];
+                        deploymentBoxes.forEach((box, idx) => {
+                            originalStyles[idx] = {
+                                display: box.style.display,
+                                marginBottom: box.style.marginBottom
+                            };
+                            box.style.display = 'block';
+                            box.style.marginBottom = '30px';
+                        });
+                    }
+                    
+                    // Scroll to top and wait for layout
+                    window.scrollTo(0, 0);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    console.log('Capturing diagram:', {
+                        width: diagramContainer.offsetWidth,
+                        height: diagramContainer.offsetHeight,
+                        scrollWidth: diagramContainer.scrollWidth,
+                        scrollHeight: diagramContainer.scrollHeight
+                    });
+                    
+                    // Capture with simplified options
+                    const canvas = await html2canvas(diagramContainer, {
+                        backgroundColor: '#1e1e1e',
+                        scale: 2,
+                        logging: false,
+                        useCORS: true,
+                        allowTaint: false
+                    });
+                    
+                    // Restore original layout
+                    if (architecture) {
+                        architecture.style.display = originalDisplay;
+                        architecture.style.flexDirection = originalFlexDirection;
+                        
+                        const deploymentBoxes = architecture.querySelectorAll('.deployment-box');
+                        const originalStyles = [];
+                        deploymentBoxes.forEach((box, idx) => {
+                            if (originalStyles[idx]) {
+                                box.style.display = originalStyles[idx].display;
+                                box.style.marginBottom = originalStyles[idx].marginBottom;
+                            }
+                        });
+                    }
+                    
+                    console.log('Canvas created:', {
+                        width: canvas.width,
+                        height: canvas.height
+                    });
+                    
+                    // Convert to data URL
+                    const imageData = canvas.toDataURL(\`image/\${format}\`, format === 'jpg' ? 0.9 : 1.0);
+                    
+                    // Get overlay name for filename
+                    const overlayName = overlaysData[selectedIndex].name.replace(/[\\\/]/g, '-');
+                    
+                    // Send to extension to save
+                    vscode.postMessage({
+                        command: 'exportImage',
+                        imageData: imageData,
+                        format: format,
+                        overlayName: overlayName
+                    });
+                    
+                } catch (error) {
+                    console.error('Export failed:', error);
+                    alert('Export failed: ' + error.message);
+                } finally {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }
+            }
+
             // Add tooltips to pods
             document.addEventListener('DOMContentLoaded', () => {
                 document.querySelectorAll('.pod').forEach(pod => {
@@ -832,12 +1122,40 @@ function getWebviewContent(overlays: any[]): string {
 function renderDiagram(overlay: any, index: number): string {
     const namespace = 'shared-platform';
     const workloads = overlay.workloads || [];
+    const allIssues = overlay.validationIssues || [];
+    
+    // Count errors and warnings
+    const errors = allIssues.filter((i: any) => i.severity === 'error').length;
+    const warnings = allIssues.filter((i: any) => i.severity === 'warning').length;
+    
+    // Determine status
+    let statusBadge = '';
+    if (errors > 0) {
+        statusBadge = `<span style="background: #f44336; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">🔴 ${errors} error${errors > 1 ? 's' : ''}, ${warnings} warning${warnings > 1 ? 's' : ''}</span>`;
+    } else if (warnings > 0) {
+        statusBadge = `<span style="background: #FF9800; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">🟡 ${warnings} warning${warnings > 1 ? 's' : ''}</span>`;
+    } else {
+        statusBadge = `<span style="background: #4CAF50; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">🟢 All checks passed</span>`;
+    }
 
     return `
         <div id="diagram-${index}" class="diagram-container">
             <div class="header">
                 <span>🎯 ${overlay.name}</span>
                 <span class="env-badge env-${overlay.environment}">${overlay.environment?.toUpperCase()}</span>
+            </div>
+            
+            <!-- Validation Status -->
+            <div style="text-align: center; margin: 15px 0 10px; padding: 10px; background: var(--vscode-editorWidget-background); border-radius: 6px;">
+                <div style="display: flex; justify-content: center; align-items: center; gap: 12px;">
+                    <strong>Validation Status:</strong> ${statusBadge}
+                    ${(errors > 0 || warnings > 0) ? `
+                        <button onclick="showAllValidationIssues(${index})" 
+                                style="background: #007ACC; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold;">
+                            📋 View All Issues
+                        </button>
+                    ` : ''}
+                </div>
             </div>
 
             <div style="text-align: center; margin: 15px 0 20px; padding: 8px; background: var(--vscode-editorWidget-background); border-radius: 6px;">
@@ -846,12 +1164,27 @@ function renderDiagram(overlay: any, index: number): string {
 
             <!-- Pod View: Deployments -->
             <div class="architecture">
-                ${workloads.map((workload: any) => `
+                ${workloads.map((workload: any) => {
+                    const workloadErrors = (workload.validationIssues || []).filter((i: any) => i.severity === 'error').length;
+                    const workloadWarnings = (workload.validationIssues || []).filter((i: any) => i.severity === 'warning').length;
+                    
+                    let badges = '';
+                    if (workloadErrors > 0) {
+                        badges += `<span style="background: #f44336; color: white; padding: 2px 8px; border-radius: 8px; font-size: 10px; margin-left: 8px;">❌ ${workloadErrors}</span>`;
+                    }
+                    if (workloadWarnings > 0) {
+                        badges += `<span style="background: #FF9800; color: white; padding: 2px 8px; border-radius: 8px; font-size: 10px; margin-left: 8px;">⚠️ ${workloadWarnings}</span>`;
+                    }
+                    
+                    return `
                     <div class="deployment-box" 
                          data-workload='${JSON.stringify(workload).replace(/'/g, "&apos;")}'
                          onclick="showTooltip(this, event)"
                          style="cursor: pointer;">
-                        <div class="deployment-header">🚀 ${workload.type}</div>
+                        <div class="deployment-header" style="display: flex; justify-content: space-between; align-items: center;">
+                            <span>🚀 ${workload.type}</span>
+                            ${badges ? `<div>${badges}</div>` : ''}
+                        </div>
                         <div style="text-align: center; font-size: 12px; font-weight: bold; color: var(--vscode-textLink-foreground); margin: 8px 0; font-family: monospace;">
                             Deployment: ${workload.fullName}
                         </div>
@@ -913,7 +1246,8 @@ function renderDiagram(overlay: any, index: number): string {
                             </div>
                         </div>
                     </div>
-                `).join('')}
+                    `;
+                }).join('')}
             </div>
 
             <!-- Network View -->

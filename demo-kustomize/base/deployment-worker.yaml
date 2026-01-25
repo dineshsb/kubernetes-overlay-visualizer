@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
       - name: worker
-        image: nginx:1.21
+        image: nginx:latest  # ← Using :latest will trigger ERROR in prod!
         envFrom:
         - configMapRef:
             name: common-config
@@ -27,14 +27,9 @@ spec:
           value: "worker"
         - name: QUEUE_NAME
           value: "default"
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "200m"
-          limits:
-            memory: "512Mi"
-            cpu: "400m"
-      # Logging Sidecar
+        # NO resources section - will trigger WARNING (missing limits)
+      
+      # Logging Sidecar (with resources - should be OK)
       - name: fluentd-sidecar
         image: fluent/fluentd:v1.14
         env:
