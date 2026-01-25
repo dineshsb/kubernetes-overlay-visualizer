@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { KustomizeTreeDataProvider } from './kustomizeTreeProvider';
 import { KustomizeParser } from './kustomizeParser';
 
+let currentPanel: vscode.WebviewPanel | undefined;
+let fileWatcher: vscode.FileSystemWatcher | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
     console.log('Kubernetes Overlay Visualizer is now active');
 
@@ -17,7 +20,7 @@ export function activate(context: vscode.ExtensionContext) {
     const visualizeCommand = vscode.commands.registerCommand(
         'kustomize-visualizer.visualize',
         async () => {
-            await showVisualization(parser);
+            await showVisualization(parser, context);
         }
     );
 
@@ -28,280 +31,282 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
-    context.subscriptions.push(treeView, visualizeCommand, refreshCommand);
-}
-
-async function showVisualization(parser: KustomizeParser) {
-    const panel = vscode.window.createWebviewPanel(
-        'kustomizeVisualization',
-        'Kustomize Overlay Visualization',
-        vscode.ViewColumn.One,
-        {
-            enableScripts: true
+    // Command to open YAML file at specific line
+    const openFileCommand = vscode.commands.registerCommand(
+        'kustomize-visualizer.openFile',
+        async (filePath: string) => {
+            const uri = vscode.Uri.file(filePath);
+            const document = await vscode.workspace.openTextDocument(uri);
+            await vscode.window.showTextDocument(document);
         }
     );
 
+    context.subscriptions.push(treeView, visualizeCommand, refreshCommand, openFileCommand);
+}
+
+async function showVisualization(parser: KustomizeParser, context: vscode.ExtensionContext) {
+    // Reuse existing panel if available
+    if (currentPanel) {
+        currentPanel.reveal(vscode.ViewColumn.One);
+    } else {
+        currentPanel = vscode.window.createWebviewPanel(
+            'kustomizeVisualization',
+            'Kustomize Overlay Visualization',
+            vscode.ViewColumn.One,
+            {
+                enableScripts: true,
+                localResourceRoots: []
+            }
+        );
+
+        // Handle panel disposal
+        currentPanel.onDidDispose(() => {
+            currentPanel = undefined;
+            if (fileWatcher) {
+                fileWatcher.dispose();
+                fileWatcher = undefined;
+            }
+        });
+
+        // Handle messages from webview
+        currentPanel.webview.onDidReceiveMessage(
+            async message => {
+                switch (message.command) {
+                    case 'openFile':
+                        await vscode.commands.executeCommand('kustomize-visualizer.openFile', message.filePath);
+                        break;
+                    case 'copyCommand':
+                        await vscode.env.clipboard.writeText(message.text);
+                        vscode.window.showInformationMessage('Command copied to clipboard!');
+                        break;
+                }
+            },
+            undefined,
+            context.subscriptions
+        );
+    }
+
+    // Load and display content
+    await refreshVisualization(currentPanel, parser);
+
+    // Setup file watcher for auto-refresh
+    setupFileWatcher(currentPanel, parser);
+}
+
+async function refreshVisualization(panel: vscode.WebviewPanel, parser: KustomizeParser) {
     const projects = await parser.findKustomizeProjects();
-    
+
     // Parse all overlays with their inheritance chain
-    const overlayDetails = await parseAllOverlays(projects);
-    
+    const overlayDetails = await parseAllOverlays(parser, projects);
+
     panel.webview.html = getWebviewContent(overlayDetails);
 }
 
-async function parseAllOverlays(projects: any[]): Promise<any[]> {
+function setupFileWatcher(panel: vscode.WebviewPanel, parser: KustomizeParser) {
+    // Dispose existing watcher
+    if (fileWatcher) {
+        fileWatcher.dispose();
+    }
+
+    // Watch for YAML file changes
+    fileWatcher = vscode.workspace.createFileSystemWatcher('**/*.{yaml,yml}');
+
+    let refreshTimeout: NodeJS.Timeout | undefined;
+
+    const scheduleRefresh = () => {
+        if (refreshTimeout) {
+            clearTimeout(refreshTimeout);
+        }
+        // Debounce: wait 500ms after last change before refreshing
+        refreshTimeout = setTimeout(() => {
+            refreshVisualization(panel, parser);
+        }, 500);
+    };
+
+    fileWatcher.onDidChange(scheduleRefresh);
+    fileWatcher.onDidCreate(scheduleRefresh);
+    fileWatcher.onDidDelete(scheduleRefresh);
+}
+
+async function parseAllOverlays(parser: KustomizeParser, projects: any[]): Promise<any[]> {
     const overlays: any[] = [];
-    
+
     for (const project of projects) {
         if (project.overlays) {
             for (const overlay of project.overlays) {
-                const details = await analyzeOverlay(overlay, project);
+                const details = await analyzeOverlay(parser, overlay, project);
                 overlays.push(details);
             }
         }
     }
-    
+
     return overlays;
 }
 
-async function analyzeOverlay(overlay: any, project: any): Promise<any> {
+async function analyzeOverlay(parser: KustomizeParser, overlay: any, project: any): Promise<any> {
     const path = require('path');
-    const fs = require('fs');
     const overlayPath = overlay.path;
     const overlayDir = path.dirname(overlayPath);
-    
+
     // Parse overlay name (e.g., client-a/dev)
     const parts = overlayDir.split(path.sep);
     const clientIdx = parts.findIndex((p: string) => p.startsWith('client-'));
     const client = clientIdx >= 0 ? parts[clientIdx] : 'unknown';
     const env = clientIdx >= 0 && parts[clientIdx + 1] ? parts[clientIdx + 1] : 'unknown';
-    
-    // Get workloads with replicas
+
+    // Parse all resources dynamically
     const workloads = await getWorkloads(overlay, client, env);
-    
-    // Get environment variables
-    const envVars = await getEnvironmentVariables(overlay, overlayDir, client);
-    
-    // Get what base/ provides
+    const configMaps = await parser.parseConfigMaps(overlay.path);
+    const networkPolicies = await parser.parseNetworkPolicies(overlay.path);
+    const services = await parser.parseServices(overlay.path);
+
+    // Validate configuration
+    const validationIssues = await parser.validateOverlay(overlay.path);
+
+    // Organize ConfigMaps by scope
+    const envVars = organizeConfigMaps(configMaps, overlay);
+
+    // Get namespace for kubectl commands
+    const namespace = overlay.content?.namespace || 'default';
+
+    // Get base contributions
     const baseContributions = project.base ? {
         resources: project.base.resources || [],
-        labels: ['managed-by: kustomize', 'platform: multi-tenant'],
         provides: 'Core deployment templates and shared config'
     } : null;
-    
-    // Get what base/client-x provides
-    const clientBaseContributions = await getClientBaseContributions(overlayDir, project, client);
-    
-    // Get what overlay provides
-    const overlayContributions = {
-        namespace: 'shared-platform',
-        patches: overlay.patches || getPatches(overlayDir),
-        environment: env.toUpperCase(),
-        envConfigMap: getEnvConfigMap(overlay)
+
+    // Get client base contributions
+    const clientBaseContributions = {
+        client: client,
+        namePrefix: overlay.content?.namePrefix || `${client}-`,
+        namespace: namespace,
+        networkPolicies: networkPolicies
     };
-    
+
+    // Get overlay contributions
+    const overlayContributions = {
+        namespace: namespace,
+        patches: overlay.patches || [],
+        environment: env.toUpperCase(),
+        configMaps: configMaps.filter(cm => cm.name.includes('env') || cm.name === 'env-config')
+    };
+
     return {
         name: `${client} / ${env}`,
         client,
         environment: env,
+        namespace,
         path: overlayPath,
         workloads: workloads,
         envVars: envVars,
+        networkPolicies: networkPolicies,
+        services: services,
+        validationIssues: validationIssues,
         tier1: baseContributions,
         tier2: clientBaseContributions,
         tier3: overlayContributions
     };
 }
 
-async function getWorkloads(overlay: any, client: string, env: string): Promise<any[]> {
-    const workloads = [];
-    const replicas = overlay.content?.replicas || [];
-    
-    // Define resource limits based on environment
-    const resourcesByEnv = env === 'prod' 
-        ? { cpu: '1000m', memory: '2Gi', cpuRequest: '500m', memoryRequest: '1Gi' }
-        : { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' };
-    
-    // Define workloads based on client
-    if (client === 'client-a') {
-        workloads.push({
-            name: 'api',
-            fullName: `${client}-api`,
-            replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
-            type: 'Backend API',
-            resources: resourcesByEnv,
-            containers: [
-                { name: 'api', type: 'main', icon: '🚀' },
-                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
-                { name: 'prometheus-exporter', type: 'sidecar', icon: '📊', purpose: 'Metrics' }
-            ]
-        });
-        workloads.push({
-            name: 'worker',
-            fullName: `${client}-worker`,
-            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 5,
-            type: 'Job Processor',
-            resources: { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' },
-            containers: [
-                { name: 'worker', type: 'main', icon: '⚙️' },
-                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' }
-            ]
-        });
-        workloads.push({
-            name: 'analytics',
-            fullName: `${client}-analytics`,
-            replicas: replicas.find((r: any) => r.name === 'analytics')?.count || 3,
-            type: 'Analytics Engine',
-            resources: { cpu: '2000m', memory: '4Gi', cpuRequest: '1000m', memoryRequest: '2Gi' },
-            containers: [
-                { name: 'analytics', type: 'main', icon: '📈' },
-                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
-                { name: 'envoy-proxy', type: 'sidecar', icon: '🔀', purpose: 'Service Mesh' }
-            ]
-        });
-    } else if (client === 'client-b') {
-        workloads.push({
-            name: 'api',
-            fullName: `${client}-api`,
-            replicas: replicas.find((r: any) => r.name === 'api')?.count || 2,
-            type: 'Backend API',
-            resources: resourcesByEnv,
-            containers: [
-                { name: 'api', type: 'main', icon: '🚀' },
-                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
-                { name: 'prometheus-exporter', type: 'sidecar', icon: '📊', purpose: 'Metrics' }
-            ]
-        });
-        workloads.push({
-            name: 'worker',
-            fullName: `${client}-worker`,
-            replicas: replicas.find((r: any) => r.name === 'worker')?.count || 5,
-            type: 'Job Processor',
-            resources: { cpu: '500m', memory: '1Gi', cpuRequest: '250m', memoryRequest: '512Mi' },
-            containers: [
-                { name: 'worker', type: 'main', icon: '⚙️' },
-                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' }
-            ]
-        });
-        workloads.push({
-            name: 'frontend',
-            fullName: `${client}-frontend`,
-            replicas: replicas.find((r: any) => r.name === 'frontend')?.count || 2,
-            type: 'Web Frontend',
-            resources: { cpu: '300m', memory: '512Mi', cpuRequest: '150m', memoryRequest: '256Mi' },
-            containers: [
-                { name: 'frontend', type: 'main', icon: '🌐' },
-                { name: 'fluentd-sidecar', type: 'sidecar', icon: '📝', purpose: 'Logging' },
-                { name: 'envoy-proxy', type: 'sidecar', icon: '🔀', purpose: 'Service Mesh' }
-            ]
-        });
+function organizeConfigMaps(configMaps: any[], overlay: any): any {
+    const organized: any = {
+        common: {},
+        client: {},
+        environment: {}
+    };
+
+    // Categorize ConfigMaps by name patterns
+    for (const cm of configMaps) {
+        if (cm.name.includes('common')) {
+            Object.assign(organized.common, cm.data);
+        } else if (cm.name.includes('client')) {
+            Object.assign(organized.client, cm.data);
+        } else if (cm.name.includes('env')) {
+            Object.assign(organized.environment, cm.data);
+        } else {
+            // Default to common if unclear
+            Object.assign(organized.common, cm.data);
+        }
     }
-    
+
+    // Also check for generated ConfigMaps in the overlay
+    const generators = overlay.content?.configMapGenerator || [];
+    for (const generator of generators) {
+        if (generator.literals) {
+            const data: { [key: string]: string } = {};
+            generator.literals.forEach((literal: string) => {
+                const [key, ...valueParts] = literal.split('=');
+                data[key] = valueParts.join('=');
+            });
+
+            if (generator.name.includes('env')) {
+                Object.assign(organized.environment, data);
+            } else if (generator.name.includes('client')) {
+                Object.assign(organized.client, data);
+            } else {
+                Object.assign(organized.common, data);
+            }
+        }
+    }
+
+    return organized;
+}
+
+async function getWorkloads(overlay: any, client: string, env: string): Promise<any[]> {
+    const parser = new KustomizeParser();
+    const fs = require('fs').promises;
+
+    // Parse deployments from the overlay path (includes base inheritance)
+    const deployments = await parser.parseDeployments(overlay.path);
+
+    // Convert parsed deployments to workload format
+    const workloads = await Promise.all(deployments.map(async deployment => {
+        const namePrefix = overlay.content?.namePrefix || '';
+        const fullName = deployment.name.startsWith(namePrefix) ? deployment.name : `${namePrefix}${deployment.name}`;
+
+        // Extract resource information from first main container
+        const mainContainer = deployment.containers.find(c => c.type === 'main');
+        const resources = mainContainer?.resources || deployment.resources || {};
+
+        // Read the actual YAML file content
+        let yamlContent = '';
+        try {
+            if (deployment.filePath) {
+                yamlContent = await fs.readFile(deployment.filePath, 'utf8');
+            }
+        } catch (error) {
+            yamlContent = '# Error reading file';
+        }
+
+        return {
+            name: deployment.name,
+            fullName: fullName,
+            replicas: deployment.replicas,
+            type: inferWorkloadType(deployment.name),
+            resources: {
+                cpu: resources.limits?.cpu || 'N/A',
+                memory: resources.limits?.memory || 'N/A',
+                cpuRequest: resources.requests?.cpu || 'N/A',
+                memoryRequest: resources.requests?.memory || 'N/A'
+            },
+            containers: deployment.containers,
+            filePath: deployment.filePath,  // Include file path for click-to-edit
+            yamlContent: yamlContent  // Include full YAML content for tooltip
+        };
+    }));
+
     return workloads;
 }
 
-async function getEnvironmentVariables(overlay: any, overlayDir: string, client: string): Promise<any> {
-    // Common variables (from base/configmap.yaml)
-    const commonVars = {
-        'PLATFORM_NAME': 'Multi-Tenant Platform',
-        'API_VERSION': 'v1',
-        'METRICS_ENABLED': 'true',
-        'METRICS_PORT': '9090',
-        'LOG_FORMAT': 'json',
-        'TIMEZONE': 'UTC'
-    };
-    
-    // Client-specific variables
-    const clientVars: any = {};
-    if (client === 'client-a') {
-        clientVars['CLIENT_ID'] = 'client-a';
-        clientVars['CLIENT_NAME'] = 'Client A Corporation';
-        clientVars['DATABASE_HOST'] = 'postgres.client-a.svc';
-        clientVars['DATABASE_TYPE'] = 'postgresql';
-        clientVars['CACHE_HOST'] = 'redis.client-a.svc';
-        clientVars['CACHE_ENABLED'] = 'true';
-    } else if (client === 'client-b') {
-        clientVars['CLIENT_ID'] = 'client-b';
-        clientVars['CLIENT_NAME'] = 'Client B Industries';
-        clientVars['DATABASE_HOST'] = 'mysql.client-b.svc';
-        clientVars['DATABASE_TYPE'] = 'mysql';
-        clientVars['EXTERNAL_API_ENABLED'] = 'true';
-        clientVars['S3_BUCKET'] = 'client-b-data';
-    }
-    
-    // Environment-specific variables
-    const envConfigMap = overlay.content?.configMapGenerator?.find((cm: any) => cm.name === 'env-config');
-    const envVars: any = {};
-    if (envConfigMap && envConfigMap.literals) {
-        envConfigMap.literals.forEach((literal: string) => {
-            const [key, value] = literal.split('=');
-            envVars[key] = value;
-        });
-    }
-    
-    return {
-        common: commonVars,
-        client: clientVars,
-        environment: envVars
-    };
-}
-
-function getPatches(overlayDir: string): string[] {
-    const fs = require('fs');
-    const path = require('path');
-    
-    try {
-        const files = fs.readdirSync(overlayDir);
-        return files.filter((f: string) => f.endsWith('-patch.yaml'));
-    } catch (error) {
-        return [];
-    }
-}
-
-function getEnvConfigMap(overlay: any): any {
-    const envConfigMap = overlay.content?.configMapGenerator?.find((cm: any) => cm.name === 'env-config');
-    return envConfigMap?.literals || [];
-}
-
-async function getClientBaseContributions(overlayDir: string, project: any, client: string): Promise<any> {
-    const path = require('path');
-    const parts = overlayDir.split(path.sep);
-    const clientIdx = parts.findIndex((p: string) => p.startsWith('client-'));
-    
-    // Detect network policy files
-    const networkPolicies: any[] = [];
-    if (client === 'client-a') {
-        networkPolicies.push({
-            file: 'db-network.yml',
-            type: 'Database & Cache Access',
-            ingress: [],
-            egress: [
-                'PostgreSQL (5432) → 10.100.1.0/24',
-                'Redis (6379) → 10.100.2.0/24',
-                'DNS (53) → 10.96.0.10/32'
-            ]
-        });
-    } else if (client === 'client-b') {
-        networkPolicies.push({
-            file: 'api-network.yml',
-            type: 'API & Database Access',
-            ingress: ['API Gateway (8080) ← 10.200.1.0/24'],
-            egress: [
-                'MySQL (3306) → 10.100.3.0/24',
-                'External APIs (443) → 192.168.50.0/24',
-                'S3 (443) → 52.92.0.0/16',
-                'DNS (53) → 10.96.0.10/32'
-            ]
-        });
-    }
-    
-    return {
-        client: client,
-        namePrefix: `${client}-`,
-        labels: [`client: ${client}`, `team: ${client === 'client-a' ? 'platform-team' : 'data-team'}`],
-        networkPolicies: networkPolicies,
-        additionalWorkloads: client === 'client-a' ? ['analytics'] : ['frontend']
-    };
+function inferWorkloadType(deploymentName: string): string {
+    const nameLower = deploymentName.toLowerCase();
+    if (nameLower.includes('api')) return 'Backend API';
+    if (nameLower.includes('worker') || nameLower.includes('job')) return 'Job Processor';
+    if (nameLower.includes('frontend') || nameLower.includes('web') || nameLower.includes('ui')) return 'Web Frontend';
+    if (nameLower.includes('analytics') || nameLower.includes('data')) return 'Analytics Engine';
+    if (nameLower.includes('database') || nameLower.includes('db')) return 'Database';
+    if (nameLower.includes('cache') || nameLower.includes('redis')) return 'Cache';
+    return 'Service';
 }
 
 function getWebviewContent(overlays: any[]): string {
@@ -370,7 +375,7 @@ function getWebviewContent(overlays: any[]): string {
             }
             .env-dev { background: #FF9800; color: white; }
             .env-prod { background: #4CAF50; color: white; }
-            
+
             /* Animations */
             @keyframes fadeInUp {
                 from {
@@ -382,23 +387,23 @@ function getWebviewContent(overlays: any[]): string {
                     transform: translateY(0);
                 }
             }
-            
+
             @keyframes pulse {
                 0%, 100% { transform: scale(1); }
                 50% { transform: scale(1.05); }
             }
-            
+
             @keyframes badgePulse {
                 0%, 100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4); }
                 50% { box-shadow: 0 0 0 8px rgba(76, 175, 80, 0); }
             }
-            
+
             @keyframes flowRight {
                 0% { transform: translateX(-10px); opacity: 0.5; }
                 50% { opacity: 1; }
                 100% { transform: translateX(10px); opacity: 0.5; }
             }
-            
+
             @keyframes slideInLeft {
                 from {
                     opacity: 0;
@@ -409,7 +414,7 @@ function getWebviewContent(overlays: any[]): string {
                     transform: translateX(0);
                 }
             }
-            
+
             @keyframes slideInRight {
                 from {
                     opacity: 0;
@@ -420,12 +425,12 @@ function getWebviewContent(overlays: any[]): string {
                     transform: translateX(0);
                 }
             }
-            
+
             @keyframes glow {
                 0%, 100% { box-shadow: 0 0 5px rgba(33, 150, 243, 0.5); }
                 50% { box-shadow: 0 0 20px rgba(33, 150, 243, 0.8), 0 0 30px rgba(33, 150, 243, 0.6); }
             }
-            
+
             /* Architecture Diagram */
             .architecture {
                 display: flex;
@@ -441,7 +446,30 @@ function getWebviewContent(overlays: any[]): string {
                 padding: 20px;
                 min-width: 400px;
                 transition: all 0.3s ease;
+                position: relative;
+                
                 animation: slideInLeft 0.6s ease-out;
+            }
+            .deployment-box::after {
+                content: '👁️ Click to view YAML';
+                position: absolute;
+                top: 10px;
+                right: 15px;
+                font-size: 10px;
+                color: var(--vscode-descriptionForeground);
+                background: var(--vscode-editor-background);
+                padding: 4px 8px;
+                border-radius: 4px;
+                opacity: 0.7;
+                pointer-events: none;
+            }
+            .deployment-box:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 8px 16px rgba(33, 150, 243, 0.3);
+                border-color: #64B5F6;
+            }
+            .deployment-box:hover::after {
+                opacity: 1;
             }
             .deployment-box:nth-child(2) {
                 animation: fadeInUp 0.8s ease-out 0.2s backwards;
@@ -520,7 +548,7 @@ function getWebviewContent(overlays: any[]): string {
                 font-weight: bold;
                 font-family: monospace;
             }
-            
+
             /* Network Diagram */
             .network-diagram {
                 margin: 20px 0;
@@ -595,7 +623,7 @@ function getWebviewContent(overlays: any[]): string {
                 background: var(--vscode-editor-background);
                 border-radius: 3px;
             }
-            
+
             /* Environment Variables */
             .env-section {
                 margin: 20px 0;
@@ -611,7 +639,7 @@ function getWebviewContent(overlays: any[]): string {
                 text-align: center;
                 color: #2196F3;
             }
-            
+
             /* Container animations */
             .diagram-container {
                 display: none;
@@ -620,7 +648,7 @@ function getWebviewContent(overlays: any[]): string {
                 display: block;
                 animation: fadeInUp 0.5s ease-out;
             }
-            
+
             /* Hover effects for command blocks */
             code {
                 transition: all 0.2s ease;
@@ -631,7 +659,7 @@ function getWebviewContent(overlays: any[]): string {
                 transform: translateX(5px);
                 color: var(--vscode-textLink-activeForeground) !important;
             }
-            
+
             /* Tooltip styling (native title attribute) */
             [title] {
                 position: relative;
@@ -639,6 +667,35 @@ function getWebviewContent(overlays: any[]): string {
         </style>
     </head>
     <body>
+        <!-- Hover Tooltip Container - Centered Modal -->
+        <div id="hover-tooltip" style="
+            position: fixed;
+            display: none;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--vscode-editorWidget-background);
+            border: 2px solid var(--vscode-widget-border);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            z-index: 10000;
+            width: 70vw;
+            max-width: 900px;
+            max-height: 80vh;
+        "></div>
+        
+        <!-- Backdrop for modal -->
+        <div id="tooltip-backdrop" style="
+            position: fixed;
+            display: none;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 9999;
+        " onclick="hideTooltip()"></div>
+
         <div class="controls">
             <label for="overlay-select">📦 Select Overlay to Visualize:</label>
             <select id="overlay-select" onchange="showDiagram(this.value)">
@@ -652,8 +709,9 @@ function getWebviewContent(overlays: any[]): string {
         ${overlays.map((overlay, idx) => renderDiagram(overlay, idx)).join('')}
 
         <script>
+            const vscode = acquireVsCodeApi();
             const overlaysData = ${JSON.stringify(overlays)};
-            
+
             function showDiagram(index) {
                 document.querySelectorAll('.diagram-container').forEach(el => {
                     el.classList.remove('active');
@@ -667,7 +725,7 @@ function getWebviewContent(overlays: any[]): string {
                     }
                 }
             }
-            
+
             function animateContainers(diagram) {
                 // Stagger container animations
                 const containers = diagram.querySelectorAll('[data-container]');
@@ -678,7 +736,83 @@ function getWebviewContent(overlays: any[]): string {
                     }, 10);
                 });
             }
+
+            // Hover tooltip functionality - Modal style
+            let tooltipHideTimer;
             
+            function showTooltip(element, event) {
+                clearTimeout(tooltipHideTimer);
+                const tooltip = document.getElementById('hover-tooltip');
+                const backdrop = document.getElementById('tooltip-backdrop');
+                if (!tooltip || !backdrop || !element.dataset.workload) return;
+                
+                const workload = JSON.parse(element.dataset.workload);
+                
+                // Escape HTML in YAML content
+                const yamlHtml = (workload.yamlContent || '# No content available')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+                
+                tooltip.innerHTML = \`
+                    <div style="display: flex; flex-direction: column; height: 100%; max-height: 80vh;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 16px; background: var(--vscode-editor-background); border-bottom: 2px solid var(--vscode-panel-border); border-radius: 8px 8px 0 0;">
+                            <div>
+                                <strong style="font-size: 16px; color: var(--vscode-textLink-foreground);">\${workload.fullName}</strong>
+                                <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px;">
+                                    <strong>File:</strong> \${workload.filePath.split(/[\\\\\/]/).pop()}
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <button onclick="event.stopPropagation(); editDeployment('\${workload.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}');" 
+                                        style="background: #007ACC; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold;">
+                                    ✏️ Edit Deployment
+                                </button>
+                                <button onclick="hideTooltip();" 
+                                        style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                    ✕ Close
+                                </button>
+                            </div>
+                        </div>
+                        <div style="flex: 1; overflow-y: auto; padding: 16px;">
+                            <div style="background: var(--vscode-textCodeBlock-background); padding: 12px; border-radius: 4px; font-family: 'Courier New', Consolas, monospace; font-size: 12px; white-space: pre-wrap; line-height: 1.6; overflow-x: auto;">
+                                <code style="color: var(--vscode-editor-foreground);">\${yamlHtml}</code>
+                            </div>
+                        </div>
+                    </div>
+                \`;
+                
+                // Show modal
+                backdrop.style.display = 'block';
+                tooltip.style.display = 'block';
+                
+                // Prevent tooltip from closing when interacting with it
+                tooltip.onclick = (e) => e.stopPropagation();
+            }
+
+            function hideTooltip() {
+                clearTimeout(tooltipHideTimer);
+                const tooltip = document.getElementById('hover-tooltip');
+                const backdrop = document.getElementById('tooltip-backdrop');
+                if (tooltip) tooltip.style.display = 'none';
+                if (backdrop) backdrop.style.display = 'none';
+            }
+
+            function editDeployment(filePath) {
+                if (!filePath) return;
+                vscode.postMessage({
+                    command: 'openFile',
+                    filePath: filePath
+                });
+            }
+
+            function copyCommand(command) {
+                vscode.postMessage({
+                    command: 'copyCommand',
+                    text: command
+                });
+            }
+
             // Add tooltips to pods
             document.addEventListener('DOMContentLoaded', () => {
                 document.querySelectorAll('.pod').forEach(pod => {
@@ -698,7 +832,7 @@ function getWebviewContent(overlays: any[]): string {
 function renderDiagram(overlay: any, index: number): string {
     const namespace = 'shared-platform';
     const workloads = overlay.workloads || [];
-    
+
     return `
         <div id="diagram-${index}" class="diagram-container">
             <div class="header">
@@ -713,17 +847,20 @@ function renderDiagram(overlay: any, index: number): string {
             <!-- Pod View: Deployments -->
             <div class="architecture">
                 ${workloads.map((workload: any) => `
-                    <div class="deployment-box">
+                    <div class="deployment-box" 
+                         data-workload='${JSON.stringify(workload).replace(/'/g, "&apos;")}'
+                         onclick="showTooltip(this, event)"
+                         style="cursor: pointer;">
                         <div class="deployment-header">🚀 ${workload.type}</div>
                         <div style="text-align: center; font-size: 12px; font-weight: bold; color: var(--vscode-textLink-foreground); margin: 8px 0; font-family: monospace;">
                             Deployment: ${workload.fullName}
                         </div>
-                        
+
                         <div style="margin: 8px 0; padding: 8px; background: var(--vscode-editor-background); border-radius: 4px;">
                             <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: var(--vscode-descriptionForeground);">Containers:</div>
                             ${workload.containers.map((container: any, idx: number) => `
-                                <div data-container style="display: flex; align-items: center; gap: 6px; padding: 3px 6px; margin: 2px 0; background: var(--vscode-editorWidget-background); border-radius: 3px; border-left: 2px solid ${container.type === 'main' ? '#4CAF50' : '#FF9800'}; transition: all 0.3s ease; cursor: pointer;" 
-                                     onmouseover="this.style.transform='translateX(5px)'; this.style.borderLeftWidth='4px';" 
+                                <div data-container style="display: flex; align-items: center; gap: 6px; padding: 3px 6px; margin: 2px 0; background: var(--vscode-editorWidget-background); border-radius: 3px; border-left: 2px solid ${container.type === 'main' ? '#4CAF50' : '#FF9800'}; transition: all 0.3s ease; cursor: pointer;"
+                                     onmouseover="this.style.transform='translateX(5px)'; this.style.borderLeftWidth='4px';"
                                      onmouseout="this.style.transform='translateX(0)'; this.style.borderLeftWidth='2px';"
                                      title="${container.type === 'main' ? 'Main Application Container' : 'Sidecar: ' + container.purpose}">
                                     <span style="font-size: 14px; ${container.type === 'sidecar' ? 'animation: pulse 2s ease-in-out infinite;' : ''}">${container.icon}</span>
@@ -732,7 +869,7 @@ function renderDiagram(overlay: any, index: number): string {
                                 </div>
                             `).join('')}
                         </div>
-                        
+
                         <div class="pods">
                             ${Array(Math.min(workload.replicas, 6)).fill(0).map((_, i) => `
                                 <div class="pod">
@@ -752,7 +889,7 @@ function renderDiagram(overlay: any, index: number): string {
                                 <span class="info-value">${workload.containers.length}</span>
                             </div>
                         </div>
-                        
+
                         <!-- Resource Limits -->
                         <div style="margin-top: 10px; padding: 8px; background: var(--vscode-editor-background); border-radius: 6px; border-left: 3px solid #9C27B0;">
                             <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: #9C27B0;">💻 Resources</div>
@@ -793,56 +930,49 @@ function renderDiagram(overlay: any, index: number): string {
 
 function renderKubectlCommands(overlay: any, namespace: string, workloads: any[]): string {
     const client = overlay.client;
-    
+
+    // Helper to render command with copy button
+    const cmdBox = (label: string, command: string) => `
+        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
+            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">${label}:</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <code style="flex: 1; font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">${command}</code>
+                <button onclick="copyCommand('${command.replace(/'/g, "\\'")}')"
+                        style="background: #007ACC; color: white; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; white-space: nowrap;">
+                    📋 Copy
+                </button>
+            </div>
+        </div>
+    `;
+
     return `
         <div class="network-diagram" style="margin: 20px 0;">
             <div class="network-title">⌨️ Kubectl Commands</div>
             <div style="background: var(--vscode-editor-background); padding: 12px; border-radius: 8px; margin-top: 12px;">
-                
+
                 <!-- Pod Commands -->
                 <div style="margin-bottom: 15px;">
                     <div style="font-size: 12px; font-weight: bold; margin-bottom: 8px; color: var(--vscode-textLink-foreground);">📦 Pod Operations</div>
                     <div style="display: grid; gap: 6px;">
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">List all deployments:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl get deploy -n ${namespace} -l client=${client}</code>
-                        </div>
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">List all pods:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl get pods -n ${namespace} -l client=${client} -o wide</code>
-                        </div>
+                        ${cmdBox('List all deployments', `kubectl get deploy -n ${namespace} -l client=${client}`)}
+                        ${cmdBox('List all pods', `kubectl get pods -n ${namespace} -l client=${client} -o wide`)}
                         ${workloads.slice(0, 1).map((workload: any) => `
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">Describe ${workload.name} deployment:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl describe deploy ${workload.fullName} -n ${namespace}</code>
-                        </div>
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">Scale ${workload.name}:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl scale deploy ${workload.fullName} --replicas=10 -n ${namespace}</code>
-                        </div>
+                            ${cmdBox(`Describe ${workload.name} deployment`, `kubectl describe deploy ${workload.fullName} -n ${namespace}`)}
+                            ${cmdBox(`Scale ${workload.name}`, `kubectl scale deploy ${workload.fullName} --replicas=10 -n ${namespace}`)}
                         `).join('')}
                     </div>
                 </div>
-                
+
                 <!-- Network Commands -->
                 <div style="margin-bottom: 15px;">
                     <div style="font-size: 12px; font-weight: bold; margin-bottom: 8px; color: #FF9800;">🌐 Network Operations</div>
                     <div style="display: grid; gap: 6px;">
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">List network policies:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl get networkpolicies -n ${namespace}</code>
-                        </div>
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">Describe network policy:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl describe netpol -n ${namespace}</code>
-                        </div>
-                        <div style="padding: 6px 10px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
-                            <div style="font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 3px;">List services:</div>
-                            <code style="font-family: monospace; font-size: 11px; color: var(--vscode-textLink-foreground);">kubectl get svc -n ${namespace} -l client=${client}</code>
-                        </div>
+                        ${cmdBox('List network policies', `kubectl get networkpolicies -n ${namespace}`)}
+                        ${cmdBox('Describe network policy', `kubectl describe netpol -n ${namespace}`)}
+                        ${cmdBox('List services', `kubectl get svc -n ${namespace} -l client=${client}`)}
                     </div>
                 </div>
-                
+
                 <!-- Logging Commands -->
                 <div style="margin-bottom: 15px;">
                     <div style="font-size: 12px; font-weight: bold; margin-bottom: 8px; color: #4CAF50;">📝 Logging Operations</div>
@@ -863,7 +993,7 @@ function renderKubectlCommands(overlay: any, namespace: string, workloads: any[]
                         `).join('')}
                     </div>
                 </div>
-                
+
                 <!-- Debug Commands -->
                 <div>
                     <div style="font-size: 12px; font-weight: bold; margin-bottom: 8px; color: #9C27B0;">🔍 Debug Operations</div>
@@ -895,7 +1025,7 @@ function renderKubectlCommands(overlay: any, namespace: string, workloads: any[]
 
 function renderEnvironmentVariables(envVars: any): string {
     if (!envVars) return '';
-    
+
     return `
         <div class="env-section">
             <div class="env-section-title">⚙️ Environment Variables</div>
@@ -910,7 +1040,7 @@ function renderEnvironmentVariables(envVars: any): string {
 
 function renderEnvVarSection(title: string, vars: any, color: string): string {
     if (!vars || Object.keys(vars).length === 0) return '';
-    
+
     return `
         <div style="flex: 1; background: var(--vscode-editor-background); border: 2px solid ${color}; border-radius: 6px; padding: 10px;">
             <div style="font-weight: bold; margin-bottom: 8px; color: ${color}; font-size: 11px;">${title}</div>
@@ -927,23 +1057,22 @@ function renderEnvVarSection(title: string, vars: any, color: string): string {
 }
 
 function renderNetworkFlow(overlay: any): string {
-    const networkPolicies = overlay.tier2?.networkPolicies || [];
+    const networkPolicies = overlay.networkPolicies || [];
     if (networkPolicies.length === 0) return '';
 
-    const policy = networkPolicies[0];
-    
-    return `
+    // Render all network policies
+    return networkPolicies.map((policy: any) => `
         <div class="network-diagram">
-            <div class="network-title">🔒 Network Policy: ${policy.type}</div>
-            
-            ${policy.ingress.length > 0 ? `
+            <div class="network-title">🔒 Network Policy: ${policy.name}</div>
+
+            ${policy.ingress && policy.ingress.length > 0 ? `
                 <div class="network-flow">
                     <div class="network-node ingress">
                         <div style="font-size: 28px;">🌐</div>
                         <div style="font-weight: bold; margin-top: 6px; font-size: 11px;">Ingress</div>
                         <div class="network-details">
-                            ${policy.ingress.map((rule: string) => `
-                                <div style="margin: 2px 0;">• ${rule}</div>
+                            ${policy.ingress.map((rule: any) => `
+                                <div style="margin: 2px 0;">• ${rule.description}</div>
                             `).join('')}
                         </div>
                     </div>
@@ -955,7 +1084,7 @@ function renderNetworkFlow(overlay: any): string {
                 </div>
             ` : ''}
 
-            ${policy.egress.length > 0 ? `
+            ${policy.egress && policy.egress.length > 0 ? `
                 <div class="network-flow">
                     <div class="network-node pod">
                         <div style="font-size: 28px;">📦</div>
@@ -966,44 +1095,51 @@ function renderNetworkFlow(overlay: any): string {
                         <div style="font-size: 28px;">🔗</div>
                         <div style="font-weight: bold; margin-top: 6px; font-size: 11px;">Egress</div>
                         <div class="network-details">
-                            ${policy.egress.map((rule: string) => `
-                                <div style="margin: 2px 0;">• ${rule}</div>
+                            ${policy.egress.map((rule: any) => `
+                                <div style="margin: 2px 0;">• ${rule.description}</div>
                             `).join('')}
                         </div>
                     </div>
                 </div>
             ` : ''}
         </div>
-    `;
+    `).join('');
 }
 
 function renderLayer(tier: any, className: string, title: string, subtitle: string): string {
     if (!tier) return '';
 
     let items: string[] = [];
-    
-    if (tier.resources) {
+
+    // Dynamically extract tier information
+    if (tier.resources && Array.isArray(tier.resources)) {
         items.push(...tier.resources.map((r: string) => `📄 ${r}`));
     }
-    if (tier.labels) {
-        items.push(...tier.labels.map((l: string) => `🏷️ ${l}`));
+    if (tier.provides) {
+        items.push(`ℹ️ ${tier.provides}`);
     }
     if (tier.namePrefix) {
         items.push(`🔤 Prefix: ${tier.namePrefix}`);
     }
-    if (tier.additionalWorkloads) {
-        items.push(`➕ Adds: ${tier.additionalWorkloads.join(', ')}`);
-    }
     if (tier.namespace) {
         items.push(`📦 Namespace: ${tier.namespace}`);
     }
-    if (tier.patches) {
+    if (tier.client) {
+        items.push(`👤 Client: ${tier.client}`);
+    }
+    if (tier.networkPolicies && Array.isArray(tier.networkPolicies)) {
+        items.push(`🔒 Network Policies: ${tier.networkPolicies.length}`);
+    }
+    if (tier.patches && Array.isArray(tier.patches)) {
         items.push(`📝 Patches: ${tier.patches.length} files`);
     }
     if (tier.environment) {
         items.push(`🌍 Environment: ${tier.environment}`);
     }
-    
+    if (tier.configMaps && Array.isArray(tier.configMaps)) {
+        items.push(`⚙️ ConfigMaps: ${tier.configMaps.length}`);
+    }
+
     return `
         <div class="layer ${className}">
             <div class="layer-title">${title}</div>
@@ -1012,7 +1148,7 @@ function renderLayer(tier: any, className: string, title: string, subtitle: stri
                 ${items.map(item => `
                     <div class="layer-item">
                         <span class="layer-item-bullet">•</span>
-                        <span>${item}</span>
+                        <span class="layer-item-text">${item}</span>
                     </div>
                 `).join('')}
             </div>

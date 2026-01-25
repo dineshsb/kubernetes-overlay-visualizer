@@ -64,6 +64,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@kubernetes/client-node": "^1.4.0",
     "js-yaml": "^4.1.0"
   }
 }
