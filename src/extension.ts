@@ -379,6 +379,7 @@ function getWebviewContent(overlays: any[]): string {
                 display: flex;
                 align-items: center;
                 gap: 15px;
+                flex-wrap: wrap;
             }
             .controls label {
                 font-weight: bold;
@@ -392,6 +393,29 @@ function getWebviewContent(overlays: any[]): string {
                 border-radius: 4px;
                 font-size: 14px;
                 min-width: 250px;
+            }
+            .view-toggle {
+                display: flex;
+                gap: 5px;
+                margin-left: auto;
+            }
+            .view-toggle-btn {
+                padding: 8px 16px;
+                background: var(--vscode-button-secondaryBackground);
+                color: var(--vscode-button-secondaryForeground);
+                border: 1px solid var(--vscode-input-border);
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: bold;
+                transition: all 0.2s;
+            }
+            .view-toggle-btn:hover {
+                background: var(--vscode-button-hoverBackground);
+            }
+            .view-toggle-btn.active {
+                background: var(--vscode-button-background);
+                color: var(--vscode-button-foreground);
             }
             .diagram-container {
                 display: none;
@@ -472,13 +496,78 @@ function getWebviewContent(overlays: any[]): string {
                 50% { box-shadow: 0 0 20px rgba(33, 150, 243, 0.8), 0 0 30px rgba(33, 150, 243, 0.6); }
             }
 
-            /* Architecture Diagram */
+            /* Architecture Diagram - Default */
             .architecture {
                 display: flex;
                 gap: 40px;
                 margin: 30px 0;
                 justify-content: center;
                 animation: fadeInUp 0.8s ease-out;
+            }
+            
+            /* View Mode: Compact Grid (Option 6) */
+            .view-mode-compact .architecture {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 20px;
+                justify-content: start;
+            }
+            .view-mode-compact .deployment-box {
+                min-width: auto;
+                width: 100%;
+            }
+            .view-mode-compact .deployment-box.collapsed {
+                min-height: auto;
+            }
+            .view-mode-compact .deployment-box.collapsed .deployment-details {
+                display: none;
+            }
+            .view-mode-compact .deployment-box.expanded .deployment-details {
+                display: block;
+            }
+            
+            /* View Mode: List + Detail (Option 2) */
+            .view-mode-list .architecture {
+                display: grid;
+                grid-template-columns: 300px 1fr;
+                gap: 20px;
+                align-items: start;
+            }
+            .view-mode-list .deployment-list {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                background: var(--vscode-editor-background);
+                padding: 12px;
+                border-radius: 8px;
+                max-height: 80vh;
+                overflow-y: auto;
+            }
+            .view-mode-list .deployment-list-item {
+                padding: 12px;
+                background: var(--vscode-editorWidget-background);
+                border: 2px solid transparent;
+                border-radius: 6px;
+                cursor: pointer;
+                transition: all 0.2s;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .view-mode-list .deployment-list-item:hover {
+                border-color: #64B5F6;
+                transform: translateX(5px);
+            }
+            .view-mode-list .deployment-list-item.selected {
+                border-color: #2196F3;
+                background: var(--vscode-list-activeSelectionBackground);
+            }
+            .view-mode-list .deployment-detail-panel {
+                background: var(--vscode-editorWidget-background);
+                border: 3px solid #2196F3;
+                border-radius: 12px;
+                padding: 20px;
+                min-height: 400px;
             }
             .deployment-box {
                 background: var(--vscode-editorWidget-background);
@@ -530,6 +619,25 @@ function getWebviewContent(overlays: any[]): string {
                 margin-bottom: 15px;
                 color: #2196F3;
                 text-align: center;
+            }
+            .expand-toggle {
+                background: var(--vscode-button-background);
+                color: var(--vscode-button-foreground);
+                border: none;
+                padding: 4px 10px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: bold;
+                transition: all 0.2s;
+                margin-left: 8px;
+            }
+            .expand-toggle:hover {
+                background: var(--vscode-button-hoverBackground);
+                transform: scale(1.05);
+            }
+            .deployment-details {
+                /* Will be shown/hidden based on collapsed/expanded state */
             }
             .pods {
                 display: flex;
@@ -748,8 +856,18 @@ function getWebviewContent(overlays: any[]): string {
                 `).join('')}
             </select>
             
+            <!-- View Mode Toggle -->
+            <div class="view-toggle">
+                <button id="view-compact-btn" class="view-toggle-btn active" onclick="setViewMode('compact')">
+                    📊 Compact Grid
+                </button>
+                <button id="view-list-btn" class="view-toggle-btn" onclick="setViewMode('list')">
+                    📋 List + Detail
+                </button>
+            </div>
+            
             <!-- Export Buttons -->
-            <div style="display: inline-block; margin-left: 20px;">
+            <div style="display: inline-block;">
                 <button onclick="exportDiagram('png')" 
                         style="background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 8px;">
                     📸 Export PNG
@@ -766,6 +884,267 @@ function getWebviewContent(overlays: any[]): string {
         <script>
             const vscode = acquireVsCodeApi();
             const overlaysData = ${JSON.stringify(overlays)};
+            
+            // View mode state
+            let currentViewMode = 'compact'; // 'compact' or 'list'
+            let expandedCards = new Set(); // For compact view
+            let selectedDeployment = 0; // For list view
+
+            function setViewMode(mode) {
+                currentViewMode = mode;
+                
+                // Update button states
+                document.getElementById('view-compact-btn').classList.toggle('active', mode === 'compact');
+                document.getElementById('view-list-btn').classList.toggle('active', mode === 'list');
+                
+                // Update all diagram containers
+                document.querySelectorAll('.diagram-container').forEach(el => {
+                    el.classList.remove('view-mode-compact', 'view-mode-list');
+                    el.classList.add('view-mode-' + mode);
+                });
+                
+                // Re-render current diagram in new mode
+                const select = document.getElementById('overlay-select');
+                if (select.value !== '') {
+                    renderCurrentDiagramInMode();
+                }
+            }
+            
+            function toggleCard(index, deploymentIdx) {
+                const cardKey = \`\${index}-\${deploymentIdx}\`;
+                if (expandedCards.has(cardKey)) {
+                    expandedCards.delete(cardKey);
+                } else {
+                    expandedCards.add(cardKey);
+                }
+                renderCurrentDiagramInMode();
+            }
+            
+            function selectDeploymentInList(index, deploymentIdx) {
+                selectedDeployment = deploymentIdx;
+                renderCurrentDiagramInMode();
+            }
+            
+            function renderCurrentDiagramInMode() {
+                const select = document.getElementById('overlay-select');
+                const index = select.value;
+                if (index === '') return;
+                
+                const overlay = overlaysData[index];
+                const diagramContainer = document.getElementById('diagram-' + index);
+                if (!diagramContainer) return;
+                
+                // Get the architecture section
+                const architecture = diagramContainer.querySelector('.architecture');
+                if (!architecture) return;
+                
+                if (currentViewMode === 'compact') {
+                    renderCompactView(architecture, overlay, index);
+                } else {
+                    renderListView(architecture, overlay, index);
+                }
+            }
+            
+            function renderCompactView(architecture, overlay, index) {
+                const workloads = overlay.workloads || [];
+                
+                architecture.innerHTML = workloads.map((workload, idx) => {
+                    const cardKey = \`\${index}-\${idx}\`;
+                    const isExpanded = expandedCards.has(cardKey);
+                    const workloadErrors = (workload.validationIssues || []).filter(i => i.severity === 'error').length;
+                    const workloadWarnings = (workload.validationIssues || []).filter(i => i.severity === 'warning').length;
+                    
+                    let badges = '';
+                    if (workloadErrors > 0) {
+                        badges += \`<span style="background: #f44336; color: white; padding: 2px 8px; border-radius: 8px; font-size: 10px; margin-left: 8px;">❌ \${workloadErrors}</span>\`;
+                    }
+                    if (workloadWarnings > 0) {
+                        badges += \`<span style="background: #FF9800; color: white; padding: 2px 8px; border-radius: 8px; font-size: 10px; margin-left: 8px;">⚠️ \${workloadWarnings}</span>\`;
+                    }
+                    
+                    return \`
+                        <div class="deployment-box \${isExpanded ? 'expanded' : 'collapsed'}" 
+                             data-workload='\${JSON.stringify(workload).replace(/'/g, "&apos;")}'>
+                            <div class="deployment-header" style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <span>🚀 \${workload.type}</span>
+                                    \${badges}
+                                </div>
+                                <button class="expand-toggle" onclick="toggleCard(\${index}, \${idx})">
+                                    \${isExpanded ? '▲ Collapse' : '▼ Expand'}
+                                </button>
+                            </div>
+                            <div style="text-align: center; font-size: 12px; font-weight: bold; color: var(--vscode-textLink-foreground); margin: 8px 0; font-family: monospace;">
+                                \${workload.fullName}
+                            </div>
+                            <div style="font-size: 11px; text-align: center; color: var(--vscode-descriptionForeground);">
+                                ✨ \${workload.replicas} pods • \${workload.containers.length} containers
+                            </div>
+                            
+                            <div class="deployment-details">
+                                \${renderDeploymentDetails(workload)}
+                            </div>
+                            
+                            <div style="margin-top: 12px; display: flex; gap: 8px; justify-content: center;">
+                                <button onclick="showTooltip(this.parentElement.parentElement, event)" 
+                                        style="background: #007ACC; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                    📄 View YAML
+                                </button>
+                                <button onclick="editDeployment('\${workload.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}')" 
+                                        style="background: #4CAF50; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                    ✏️ Edit
+                                </button>
+                            </div>
+                        </div>
+                    \`;
+                }).join('');
+            }
+            
+            function renderListView(architecture, overlay, index) {
+                const workloads = overlay.workloads || [];
+                const selectedWorkload = workloads[selectedDeployment] || workloads[0];
+                
+                architecture.innerHTML = \`
+                    <div class="deployment-list">
+                        <div style="font-size: 12px; font-weight: bold; margin-bottom: 12px; padding: 8px; background: var(--vscode-editorWidget-background); border-radius: 4px;">
+                            📦 DEPLOYMENTS (\${workloads.length})
+                        </div>
+                        \${workloads.map((workload, idx) => {
+                            const workloadErrors = (workload.validationIssues || []).filter(i => i.severity === 'error').length;
+                            const workloadWarnings = (workload.validationIssues || []).filter(i => i.severity === 'warning').length;
+                            const isSelected = idx === selectedDeployment;
+                            
+                            let badges = '';
+                            if (workloadErrors > 0) {
+                                badges += \`<span style="background: #f44336; color: white; padding: 2px 6px; border-radius: 6px; font-size: 9px;">❌\${workloadErrors}</span>\`;
+                            }
+                            if (workloadWarnings > 0) {
+                                badges += \`<span style="background: #FF9800; color: white; padding: 2px 6px; border-radius: 6px; font-size: 9px; margin-left: 4px;">⚠️\${workloadWarnings}</span>\`;
+                            }
+                            
+                            return \`
+                                <div class="deployment-list-item \${isSelected ? 'selected' : ''}" 
+                                     onclick="selectDeploymentInList(\${index}, \${idx})">
+                                    <span style="font-size: 18px;">🚀</span>
+                                    <div style="flex: 1;">
+                                        <div style="font-size: 11px; font-weight: bold;">\${workload.name}</div>
+                                        <div style="font-size: 9px; color: var(--vscode-descriptionForeground);">\${workload.replicas} pods</div>
+                                    </div>
+                                    \${badges}
+                                </div>
+                            \`;
+                        }).join('')}
+                    </div>
+                    <div class="deployment-detail-panel">
+                        \${selectedWorkload ? renderFullDeploymentDetail(selectedWorkload) : '<div>Select a deployment</div>'}
+                    </div>
+                \`;
+            }
+            
+            function renderDeploymentDetails(workload) {
+                return \`
+                    <div style="margin: 8px 0; padding: 8px; background: var(--vscode-editor-background); border-radius: 4px;">
+                        <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: var(--vscode-descriptionForeground);">Containers:</div>
+                        \${workload.containers.map((container, idx) => \`
+                            <div data-container style="display: flex; align-items: center; gap: 6px; padding: 3px 6px; margin: 2px 0; background: var(--vscode-editorWidget-background); border-radius: 3px; border-left: 2px solid \${container.type === 'main' ? '#4CAF50' : '#FF9800'}; transition: all 0.3s ease; cursor: pointer;"
+                                 onmouseover="this.style.transform='translateX(5px)'; this.style.borderLeftWidth='4px';"
+                                 onmouseout="this.style.transform='translateX(0)'; this.style.borderLeftWidth='2px';"
+                                 title="\${container.type === 'main' ? 'Main Application Container' : 'Sidecar: ' + container.purpose}">
+                                <span style="font-size: 14px; \${container.type === 'sidecar' ? 'animation: pulse 2s ease-in-out infinite;' : ''}">\${container.icon}</span>
+                                <span style="font-size: 10px; font-family: monospace; flex: 1;">\${container.name}</span>
+                                \${container.purpose ? \`<span style="font-size: 9px; color: var(--vscode-descriptionForeground);">\${container.purpose}</span>\` : ''}
+                            </div>
+                        \`).join('')}
+                    </div>
+
+                    <div class="pods">
+                        \${Array(Math.min(workload.replicas, 6)).fill(0).map((_, i) => \`
+                            <div class="pod">
+                                <div class="pod-icon">📦</div>
+                                <div class="pod-label">\${workload.containers.length}c</div>
+                            </div>
+                        \`).join('')}
+                        \${workload.replicas > 6 ? \`<div class="pod" style="background: #FF9800;">+\${workload.replicas - 6}</div>\` : ''}
+                    </div>
+                    
+                    <!-- Resource Limits -->
+                    <div style="margin-top: 10px; padding: 8px; background: var(--vscode-editor-background); border-radius: 6px; border-left: 3px solid #9C27B0;">
+                        <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: #9C27B0;">💻 Resources</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 10px;">
+                            <div>
+                                <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">CPU Limit:</div>
+                                <div style="font-family: monospace; color: var(--vscode-textLink-foreground); font-weight: bold;">\${workload.resources.cpu}</div>
+                            </div>
+                            <div>
+                                <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">Memory Limit:</div>
+                                <div style="font-family: monospace; color: var(--vscode-textLink-foreground); font-weight: bold;">\${workload.resources.memory}</div>
+                            </div>
+                            <div>
+                                <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">CPU Request:</div>
+                                <div style="font-family: monospace; color: var(--vscode-descriptionForeground);">\${workload.resources.cpuRequest}</div>
+                            </div>
+                            <div>
+                                <div style="color: var(--vscode-descriptionForeground); margin-bottom: 2px;">Memory Request:</div>
+                                <div style="font-family: monospace; color: var(--vscode-descriptionForeground);">\${workload.resources.memoryRequest}</div>
+                            </div>
+                        </div>
+                    </div>
+                \`;
+            }
+            
+            function renderFullDeploymentDetail(workload) {
+                const workloadErrors = (workload.validationIssues || []).filter(i => i.severity === 'error').length;
+                const workloadWarnings = (workload.validationIssues || []).filter(i => i.severity === 'warning').length;
+                
+                let statusBadge = '';
+                if (workloadErrors > 0) {
+                    statusBadge = \`<span style="background: #f44336; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">❌ \${workloadErrors} error\${workloadErrors > 1 ? 's' : ''}, \${workloadWarnings} warning\${workloadWarnings > 1 ? 's' : ''}</span>\`;
+                } else if (workloadWarnings > 0) {
+                    statusBadge = \`<span style="background: #FF9800; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">⚠️ \${workloadWarnings} warning\${workloadWarnings > 1 ? 's' : ''}</span>\`;
+                } else {
+                    statusBadge = \`<span style="background: #4CAF50; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">🟢 All checks passed</span>\`;
+                }
+                
+                return \`
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid var(--vscode-panel-border);">
+                        <div>
+                            <div style="font-size: 18px; font-weight: bold; color: var(--vscode-textLink-foreground);">🚀 \${workload.fullName}</div>
+                            <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px;">
+                                \${workload.replicas} pods • \${workload.containers.length} containers
+                            </div>
+                        </div>
+                        <div>\${statusBadge}</div>
+                    </div>
+                    
+                    \${renderDeploymentDetails(workload)}
+                    
+                    <!-- Validation Issues -->
+                    \${(workload.validationIssues && workload.validationIssues.length > 0) ? \`
+                        <div style="margin-top: 16px; padding: 12px; background: var(--vscode-inputValidation-errorBackground); border-left: 4px solid #f44336; border-radius: 4px;">
+                            <div style="font-size: 12px; font-weight: bold; margin-bottom: 8px; color: #f44336;">⚠️ VALIDATION ISSUES</div>
+                            \${workload.validationIssues.map(issue => \`
+                                <div style="margin-bottom: 8px; padding: 8px; background: rgba(\${issue.severity === 'error' ? '244, 67, 54' : '255, 152, 0'}, 0.1); border-radius: 4px;">
+                                    <div style="font-size: 11px; font-weight: bold; color: \${issue.severity === 'error' ? '#f44336' : '#FF9800'}; margin-bottom: 4px;">
+                                        \${issue.severity === 'error' ? '❌' : '⚠️'} \${issue.resource}
+                                    </div>
+                                    <div style="font-size: 10px; color: var(--vscode-foreground);">\${issue.message}</div>
+                                </div>
+                            \`).join('')}
+                        </div>
+                    \` : ''}
+                    
+                    <div style="margin-top: 16px; display: flex; gap: 8px;">
+                        <button onclick="showTooltip(document.querySelector('[data-workload]'), event)" 
+                                style="background: #007ACC; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; flex: 1;">
+                            📄 View Full YAML
+                        </button>
+                        <button onclick="editDeployment('\${workload.filePath.replace(/\\\\/g, '\\\\\\\\').replace(/'/g, "\\\\'")}')" 
+                                style="background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; flex: 1;">
+                            ✏️ Edit Deployment
+                        </button>
+                    </div>
+                \`;
+            }
 
             function showDiagram(index) {
                 document.querySelectorAll('.diagram-container').forEach(el => {
@@ -775,8 +1154,13 @@ function getWebviewContent(overlays: any[]): string {
                     const diagram = document.getElementById('diagram-' + index);
                     if (diagram) {
                         diagram.classList.add('active');
+                        // Apply current view mode
+                        diagram.classList.remove('view-mode-compact', 'view-mode-list');
+                        diagram.classList.add('view-mode-' + currentViewMode);
                         // Trigger animations on container elements
                         animateContainers(diagram);
+                        // Render in current mode
+                        renderCurrentDiagramInMode();
                     }
                 }
             }
