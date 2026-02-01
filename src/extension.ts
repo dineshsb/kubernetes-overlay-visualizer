@@ -1396,11 +1396,29 @@ function getWebviewContent(overlays: any[]): string {
                 button.disabled = true;
                 
                 try {
-                    // Hide tooltips and modals before export
+                    // Hide ALL overlays, tooltips, and UI elements before export
                     const tooltip = document.getElementById('hover-tooltip');
                     const backdrop = document.getElementById('tooltip-backdrop');
+                    const controls = document.querySelector('.controls');
+                    
+                    const originalTooltipDisplay = tooltip ? tooltip.style.display : '';
+                    const originalBackdropDisplay = backdrop ? backdrop.style.display : '';
+                    const originalControlsDisplay = controls ? controls.style.display : '';
+                    
                     if (tooltip) tooltip.style.display = 'none';
                     if (backdrop) backdrop.style.display = 'none';
+                    if (controls) controls.style.display = 'none';
+                    
+                    // Hide all ::after pseudo-elements (like "Click to view" hints)
+                    const styleElement = document.createElement('style');
+                    styleElement.id = 'export-hide-style';
+                    styleElement.textContent = \`
+                        .deployment-box::after { display: none !important; }
+                        button { opacity: 0.3 !important; pointer-events: none !important; }
+                        #hover-tooltip { display: none !important; visibility: hidden !important; }
+                        #tooltip-backdrop { display: none !important; visibility: hidden !important; opacity: 0 !important; }
+                    \`;
+                    document.head.appendChild(styleElement);
                     
                     // Temporarily change architecture layout for export (flexbox issues with html2canvas)
                     const architecture = diagramContainer.querySelector('.architecture');
@@ -1417,16 +1435,18 @@ function getWebviewContent(overlays: any[]): string {
                         deploymentBoxes.forEach((box, idx) => {
                             originalStyles[idx] = {
                                 display: box.style.display,
-                                marginBottom: box.style.marginBottom
+                                marginBottom: box.style.marginBottom,
+                                cursor: box.style.cursor
                             };
                             box.style.display = 'block';
                             box.style.marginBottom = '30px';
+                            box.style.cursor = 'default';
                         });
                     }
                     
                     // Scroll to top and wait for layout
                     window.scrollTo(0, 0);
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await new Promise(resolve => setTimeout(resolve, 800));
                     
                     console.log('Capturing diagram:', {
                         width: diagramContainer.offsetWidth,
@@ -1439,12 +1459,22 @@ function getWebviewContent(overlays: any[]): string {
                     const canvas = await html2canvas(diagramContainer, {
                         backgroundColor: '#1e1e1e',
                         scale: 2,
-                        logging: false,
+                        logging: true,
                         useCORS: true,
-                        allowTaint: false
+                        allowTaint: false,
+                        width: diagramContainer.scrollWidth,
+                        height: diagramContainer.scrollHeight,
+                        windowWidth: diagramContainer.scrollWidth,
+                        windowHeight: diagramContainer.scrollHeight,
+                        ignoreElements: function(element) {
+                            // Ignore tooltip, backdrop, and controls during capture
+                            return element.id === 'hover-tooltip' || 
+                                   element.id === 'tooltip-backdrop' ||
+                                   element.classList.contains('controls');
+                        }
                     });
                     
-                    // Restore original layout
+                    // Restore original layout and visibility
                     if (architecture) {
                         architecture.style.display = originalDisplay;
                         architecture.style.flexDirection = originalFlexDirection;
@@ -1455,9 +1485,19 @@ function getWebviewContent(overlays: any[]): string {
                             if (originalStyles[idx]) {
                                 box.style.display = originalStyles[idx].display;
                                 box.style.marginBottom = originalStyles[idx].marginBottom;
+                                box.style.cursor = originalStyles[idx].cursor || 'pointer';
                             }
                         });
                     }
+                    
+                    // Restore UI elements
+                    if (tooltip) tooltip.style.display = originalTooltipDisplay;
+                    if (backdrop) backdrop.style.display = originalBackdropDisplay;
+                    if (controls) controls.style.display = originalControlsDisplay;
+                    
+                    // Remove temporary style
+                    const tempStyle = document.getElementById('export-hide-style');
+                    if (tempStyle) tempStyle.remove();
                     
                     console.log('Canvas created:', {
                         width: canvas.width,
